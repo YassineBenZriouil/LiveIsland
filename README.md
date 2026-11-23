@@ -132,6 +132,7 @@ The island's **Accounts** tab has the same switch, with each tool's **Auto** but
 
 **Everyday**
 - Opens on hover or click and closes when you move away; clicks pass straight through everywhere else
+- On the notch, on any display you pick in **Settings › Island**, or anywhere you like: click the pin in the open island, point, and press ⌘
 - Under 1% of one core while closed: nothing animates frame by frame unless you can see it
 - Your tab order, Software Update in one click, Open at Login, a menu bar panel, and Liquid Glass on macOS 26
 - `liveisland://` links for Shortcuts, Raycast or a terminal (see [Links](#links))
@@ -180,6 +181,7 @@ git clone https://github.com/charonova/LiveIsland.git && cd LiveIsland
 | `liveisland://open` · `close` | Open or close the island; `open/media`, `agents`, `activity`, `accounts`, `accounts/codex` pick a page |
 | `liveisland://settings/accounts/codex/console` | Open Settings on a page: `general`, `island`, `media`, `agents`, `accounts` (then `claude` or `codex`, and `automatic` or `console`), `updates`, `about` |
 | `liveisland://timer/5` | Start a 5-minute timer |
+| `liveisland://move` · `move/top` | Move the island: it follows the pointer until you press ⌘; or put it back on the top edge |
 | `liveisland://update` · `update/install` | Check for a new version, and install it |
 
 ## Credits

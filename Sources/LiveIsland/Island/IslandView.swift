@@ -4,21 +4,28 @@ import SwiftUI
 private let islandSpring = Animation.spring(response: 0.42, dampingFraction: 0.8)
 
 /// The island: a black shape growing out of the notch, with compact wings beside it or the
-/// full panel below it.
+/// full panel below it. Dragged away from the notch, it floats and opens toward the side with room.
 struct IslandView: View {
     @EnvironmentObject private var model: IslandModel
     let layout: IslandLayout
 
     var body: some View {
-        let primary = model.primary
+        let moving = model.isMovingIsland
+        let primary = moving ? nil : model.primary
         let size = layout.size(expanded: model.isExpanded, active: primary != nil)
         let shape = IslandShape(bottomRadius: model.isExpanded ? 32 : (primary != nil ? 14 : 10),
-                                topRadius: model.isExpanded ? 12 : 6)
-        VStack(spacing: 0) {
+                                topRadius: model.isExpanded ? 12 : 6, floating: layout.isFloating)
+        ZStack(alignment: layout.opensDown ? .top : .bottom) {
             ZStack(alignment: .top) {
                 shape.fill(Color.black)
                 Group {
-                    if model.isExpanded {
+                    if moving {
+                        Text("Press ⌘ to place it")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(maxHeight: .infinity)
+                            .transition(.opacity)
+                    } else if model.isExpanded {
                         ExpandedIsland(layout: layout)
                             .transition(.blurReplace.combined(with: .opacity))
                     } else if let primary {
@@ -33,10 +40,17 @@ struct IslandView: View {
             .clipShape(shape)
             .contentShape(shape)
             .onTapGesture { if !model.isExpanded { model.expand() } }
-            .shadow(color: .black.opacity(model.isExpanded ? 0.5 : 0), radius: 22, y: 12)
-            Spacer(minLength: 0)
+            // Floating, it needs a little shadow even closed, or it's lost on a dark desktop.
+            .overlay {
+                // While it follows the pointer, an outline shows where it will land.
+                if moving { shape.stroke(.white.opacity(0.5), lineWidth: 1) }
+            }
+            .shadow(color: .black.opacity(model.isExpanded ? 0.5 : (layout.isFloating ? 0.35 : 0)),
+                    radius: model.isExpanded ? 22 : 8, y: model.isExpanded ? 12 : 3)
+            .offset(x: layout.horizontalOffset(expanded: model.isExpanded, active: primary != nil))
         }
-        .frame(width: IslandLayout.canvas.width, height: IslandLayout.canvas.height, alignment: .top)
+        .frame(width: IslandLayout.canvas.width, height: IslandLayout.canvas.height,
+               alignment: layout.opensDown ? .top : .bottom)
         .animation(islandSpring, value: model.isExpanded)
         .animation(islandSpring, value: primary.map(CompactIsland.identity(of:)))
         .environment(\.colorScheme, .dark)
@@ -44,9 +58,11 @@ struct IslandView: View {
 }
 
 /// Top corners curve outward into the menu bar, like the notch itself; bottom corners round in.
+/// Floating away from the top edge, every corner rounds in.
 struct IslandShape: Shape {
     var bottomRadius: CGFloat
     var topRadius: CGFloat
+    var floating = false
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(bottomRadius, topRadius) }
@@ -56,6 +72,10 @@ struct IslandShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
         guard rect.height > 0, rect.width > 0 else { return path }
+        if floating {
+            let radius = min(bottomRadius, rect.height / 2, rect.width / 2)
+            return Path(roundedRect: rect, cornerRadius: radius, style: .continuous)
+        }
         let top = min(topRadius, rect.width / 4, rect.height / 2)
         let bottom = min(bottomRadius, (rect.width - 2 * top) / 2, rect.height - top)
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))

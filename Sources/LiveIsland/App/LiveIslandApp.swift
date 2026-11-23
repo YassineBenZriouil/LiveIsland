@@ -40,7 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// liveisland:// links, e.g. from Shortcuts: open[/media|agents|activity|accounts[/claude|codex]], close,
-    /// settings[/general|island|media|agents|accounts[/claude|codex][/accounts|automatic|console]|updates|about], update[/install], timer/<minutes>.
+    /// settings[/general|island|media|agents|accounts[/claude|codex][/accounts|automatic|console]|updates|about], update[/install], timer/<minutes>,
+    /// move (the island follows the pointer until ⌘), move/top (back on the top edge).
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.scheme == "liveisland" {
             Logger(subsystem: "com.aissam.liveisland", category: "url").notice("Open \(url.absoluteString, privacy: .public)")
@@ -52,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let kind = parts.dropFirst(2).first.flatMap({ AgentKind(rawValue: $0.lowercased()) }) { model.accountsKind = kind }
                 model.expand(on: detail.flatMap { IslandTab(rawValue: $0.capitalized) })
             case "close": model.collapse()
+            case "move":
+                if detail == "top" { model.islandPlacement = nil } else { model.beginMovingIsland() }
             case "update":
                 // update: check now and show the result; update/install also installs what it finds.
                 let install = detail == "install"

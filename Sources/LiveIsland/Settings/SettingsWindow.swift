@@ -233,7 +233,8 @@ private struct GeneralPage: View {
             }
             Section {
                 ForEach([("liveisland://open", "Open the island"), ("liveisland://close", "Close it"),
-                         ("liveisland://timer/5", "Start a 5-minute timer")], id: \.0) { link, what in
+                         ("liveisland://timer/5", "Start a 5-minute timer"),
+                         ("liveisland://move", "Move the island (⌘ places it)")], id: \.0) { link, what in
                     LabeledContent(what) {
                         Text(link).font(.system(.body, design: .monospaced)).textSelection(.enabled).foregroundStyle(.secondary)
                     }
@@ -280,11 +281,74 @@ private struct IslandPage: View {
                     }
                 }
             }
+            DisplaySection()
             Section("Look") {
                 ToggleRow(symbol: "sun.max.fill", tint: .purple, title: "Background glow",
                           detail: "Color the open island: the cover's colors on Media, the agents' on Agents", isOn: $model.ambientGlow)
             }
         }
+    }
+}
+
+/// Which display the island lives on, for people with more than one.
+private struct DisplaySection: View {
+    @EnvironmentObject private var model: IslandModel
+
+    var body: some View {
+        Section {
+            LabeledContent {
+                Picker("", selection: $model.islandDisplay) {
+                    Text(automaticName).tag(DisplayChoice.automatic)
+                    Divider()
+                    ForEach(model.displays) { display in
+                        Text(display.name).tag(DisplayChoice.display(display.id))
+                    }
+                    if case let .display(id) = model.islandDisplay, !model.displays.contains(where: { $0.id == id }) {
+                        Text("A display that isn't connected").tag(model.islandDisplay)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+            } label: {
+                HStack(spacing: 10) {
+                    IconBadge(symbol: "display.2", tint: .indigo, size: 26)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Show on")
+                        Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            LabeledContent {
+                HStack {
+                    if model.islandPlacement != nil {
+                        Button("Back to the Top") { model.islandPlacement = nil }
+                    }
+                    Button("Move…") { model.beginMovingIsland() }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    IconBadge(symbol: "arrow.up.and.down.and.arrow.left.and.right", tint: .teal, size: 26)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(model.islandPlacement == nil ? "On the top edge" : "Where you put it")
+                        Text("Click the pin in the open island (or Move…): it follows the pointer, on any display. Press ⌘ to place it; near the top middle, it goes back to the top.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("Display")
+        }
+    }
+
+    private var automaticName: String {
+        model.displays.contains(where: \.hasNotch) ? "Automatic (the notch)" : "Automatic (the menu bar's display)"
+    }
+
+    private var detail: String {
+        if case let .display(id) = model.islandDisplay, !model.displays.contains(where: { $0.id == id }) {
+            return "It's not connected, so the island is on the automatic one until it is."
+        }
+        return "On a display without a notch, the island is a small pill under the top edge, unless you move it."
     }
 }
 

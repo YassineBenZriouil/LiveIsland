@@ -123,6 +123,16 @@ final class IslandModel: ObservableObject {
         }
     }
     @Published private(set) var launchAtLogin = LoginItem.isEnabled
+    /// The display the island lives on, picked in Settings › Island.
+    @Published var islandDisplay: DisplayChoice {
+        didSet { defaults.set(islandDisplay.saved, forKey: Key.display) }
+    }
+    /// Where the island floats after it was moved; nil hangs it from the top edge (the notch).
+    @Published var islandPlacement: IslandPlacement? {
+        didSet { defaults.set(islandPlacement?.saved, forKey: Key.placement) }
+    }
+    /// The displays connected now, for the picker; the island's controller keeps it current.
+    @Published private(set) var displays: [IslandDisplay] = []
 
     let media = NowPlayingProvider()
     let volume = OutputVolume()
@@ -163,6 +173,30 @@ final class IslandModel: ObservableObject {
         checkForUpdates = defaults.bool(forKey: Key.updates)
         tabOrder = Ordering.restore(defaults.stringArray(forKey: Key.tabOrder) ?? [], all: IslandTab.allCases, name: \.rawValue)
         controlPlayers = defaults.bool(forKey: Key.players)
+        islandDisplay = DisplayChoice(saved: defaults.string(forKey: Key.display))
+        islandPlacement = IslandPlacement(saved: defaults.string(forKey: Key.placement))
+    }
+
+    /// Following the pointer after a click on the pin, until ⌘ sets it down.
+    @Published private(set) var isMovingIsland = false
+
+    func beginMovingIsland() {
+        collapse()
+        isMovingIsland = true
+    }
+
+    func endMovingIsland() {
+        isMovingIsland = false
+    }
+
+    /// Where the island was set down: that display, floating there or (nil) on its top edge.
+    func placeIsland(on display: String?, at placement: IslandPlacement?) {
+        if let display { islandDisplay = .display(display) }
+        islandPlacement = placement
+    }
+
+    func setDisplays(_ list: [IslandDisplay]) {
+        if list != displays { displays = list }
     }
 
     func start() {
@@ -692,5 +726,7 @@ final class IslandModel: ObservableObject {
         static let waveform = "liveWaveform"
         static let tabOrder = "tabOrder"
         static let updates = "checkForUpdates"
+        static let display = "islandDisplay"
+        static let placement = "islandPlacement"
     }
 }

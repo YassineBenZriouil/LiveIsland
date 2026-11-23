@@ -14,7 +14,7 @@ struct ExpandedIsland: View {
         // The camera housing hides whatever is under it: the tabs and the status each get the
         // room beside the notch, and the tabs drop their label when it wouldn't fit there.
         let width = layout.size(expanded: true, active: true).width
-        let wing = max(0, (width - layout.notch.width) / 2 - 18 - 6)
+        let wing = max(0, (width - layout.headerGap) / 2 - 18 - 6)
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 ViewThatFits(in: .horizontal) {
@@ -128,6 +128,12 @@ private struct StatusStrip: View {
             TimelineView(.everyMinute) { context in
                 Text(context.date, format: .dateTime.hour().minute())
             }
+            Button { model.beginMovingIsland() } label: {
+                Image(systemName: "pin.fill").font(.system(size: 11, weight: .semibold))
+                    .frame(width: 22, height: 22).contentShape(Circle())
+            }
+            .buttonStyle(PressableStyle())
+            .help("Move the island: it follows the pointer; press ⌘ to place it")
             Button { model.openSettings() } label: {
                 Image(systemName: "gearshape.fill").font(.system(size: 11, weight: .semibold))
                     .frame(width: 22, height: 22).contentShape(Circle())
