@@ -27,18 +27,17 @@ struct LyricsTuningView: View {
             slider("Text size", fraction(look.textScale, LyricsTypography.scaleRange), "\(Int((look.textScale * 100).rounded())) %") {
                 sing.appearance.textScale = value($0, LyricsTypography.scaleRange, step: 0.05)
             }
-            slider("Blur", look.blur, percent(look.blur, none: "None", full: "Full")) { sing.appearance.blur = $0 }
-            slider("Background", look.opacity, percent(look.opacity)) { sing.appearance.opacity = $0 }
+            slider("Tint", look.tint, percent(look.tint, none: "None", full: "Full")) { sing.appearance.tint = $0 }
             slider("Other lines", 1 - look.dimming, "\(Int((look.otherLinesOpacity * 100).rounded())) %") {
                 sing.appearance.dimming = 1 - $0
             }
-            slider("Soft edges", look.edgeFade, percent(look.edgeFade, none: "None", full: "Strong")) { sing.appearance.edgeFade = $0 }
             slider("Corners", fraction(look.cornerRadius, LyricsAppearance.cornerRange), "\(Int(look.cornerRadius)) pt") {
                 sing.appearance.cornerRadius = value($0, LyricsAppearance.cornerRange, step: 1)
             }
             slider("Timing", fraction(sing.offset, LyricsOffset.range), LyricsOffset.label(sing.offset)) {
                 sing.offset = LyricsOffset.stepped(value($0, LyricsOffset.range, step: LyricsOffset.step), by: 0)
             }
+            chips("Glass", LyricsAppearance.GlassStyle.allCases, selected: look.glass, title: \.title) { sing.appearance.glass = $0 }
             chips("Lines", LyricsLineCount.allCases, selected: look.lines, title: \.title) { sing.appearance.lines = $0 }
             chips("Highlight", LyricsAppearance.Highlight.allCases, selected: look.highlight,
                   title: { $0 == .fill ? "Fill" : $0 == .line ? "Line" : "Off" }) { sing.appearance.highlight = $0 }
@@ -55,7 +54,7 @@ struct LyricsTuningView: View {
         .padding(14)
         .frame(width: LyricsTuning.size.width, height: LyricsTuning.size.height, alignment: .top)
         .foregroundStyle(.white)
-        .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .modifier(PanelGlass())
         .environment(\.colorScheme, .dark)
     }
 
@@ -108,5 +107,17 @@ struct LyricsTuningView: View {
         if let none, value < 0.01 { return none }
         if let full, value > 0.99 { return full }
         return "\(Int((value * 100).rounded())) %"
+    }
+}
+
+/// The tuning panel's background: frosted Liquid Glass, or a thick material before macOS 26.
+private struct PanelGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        if #available(macOS 26, *) {
+            content.glassEffect(Glass.regular.tint(.black.opacity(0.35)), in: shape)
+        } else {
+            content.background(.ultraThickMaterial, in: shape)
+        }
     }
 }

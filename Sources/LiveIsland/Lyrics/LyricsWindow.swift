@@ -90,29 +90,34 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-/// The panel's content: a frosted backdrop (an `NSVisualEffectView`, the only real blur of
-/// what's behind a window) under the SwiftUI card, both filling the whole card, and every
-/// edge and corner a handle to resize it.
+/// The panel's content: the SwiftUI card, with every edge and corner a handle to resize it.
+/// On macOS 26 the card draws its own Liquid Glass; before it, a frosted backdrop (an
+/// `NSVisualEffectView`, the only real blur of what's behind a window) sits under it,
+/// rounded like the card.
 final class LyricsResizingView: NSView {
     var limits: (() -> CGRect)?
     var onFrame: ((CGRect, Bool) -> Void)?
     var onHover: ((Bool) -> Void)?
-    private let backdrop = NSVisualEffectView()
+    /// Only before macOS 26.
+    private let backdrop: NSVisualEffectView?
     private let host: NSView
     private var drag: (start: CGRect, mouse: CGPoint, edges: LyricsGeometry.Edges)?
     private var look = LyricsAppearance.standard
-    private var maskedFor: (radius: CGFloat, edge: CGFloat)?
+    private var maskedRadius: CGFloat?
     private static let inset: CGFloat = 6
 
     init(host: NSView) {
         self.host = host
+        backdrop = LiquidGlass.isAvailable ? nil : NSVisualEffectView()
         super.init(frame: .zero)
-        backdrop.blendingMode = .behindWindow
-        backdrop.state = .active
-        backdrop.material = .hudWindow
-        backdrop.autoresizingMask = [.width, .height]
+        if let backdrop {
+            backdrop.blendingMode = .behindWindow
+            backdrop.state = .active
+            backdrop.material = .hudWindow
+            backdrop.autoresizingMask = [.width, .height]
+            addSubview(backdrop)
+        }
         host.autoresizingMask = [.width, .height]
-        addSubview(backdrop)
         addSubview(host)
     }
 
@@ -123,48 +128,34 @@ final class LyricsResizingView: NSView {
 
     override func layout() {
         super.layout()
-        backdrop.frame = bounds
+        backdrop?.frame = bounds
         host.frame = bounds
         updateMask()
     }
 
-    /// The blur's strength and its look (dark or light).
+    /// The fallback's look: frosted or lighter for clear glass, dark or light.
     func apply(_ look: LyricsAppearance) {
         self.look = look
-        backdrop.isHidden = look.blur < 0.02
-        backdrop.alphaValue = CGFloat(look.blur)
-        backdrop.material = look.blur > 0.7 ? .fullScreenUI : .hudWindow
+        guard let backdrop else { return }
+        backdrop.alphaValue = look.glass == .regular ? 1 : 0.45
         backdrop.appearance = NSAppearance(named: look.hasLightBackground ? .aqua : .darkAqua)
         updateMask()
     }
 
-    /// The backdrop's shape: the card's corners and its soft edges, the same on all four
-    /// sides. The mask is a small nine-part image, its middle stretched, so it fills the
-    /// whole card at any size, while it's resized too.
+    /// The fallback's corners: a small nine-part image, its middle stretched, so it fills the
+    /// whole card at any size.
     private func updateMask() {
+        guard let backdrop else { return }
         let size = bounds.size
         guard size.width > 0, size.height > 0 else { return }
-        let radius = min(CGFloat(look.cornerRadius), min(size.width, size.height) / 2)
-        let edge = CGFloat(look.softEdge(for: Double(size.width), Double(size.height))).rounded()
-        if let maskedFor, maskedFor.radius == radius, maskedFor.edge == edge, backdrop.maskImage != nil { return }
-        maskedFor = (radius, edge)
-        let cap = max(radius, edge) + 1
+        let radius = min(CGFloat(look.cornerRadius), min(size.width, size.height) / 2).rounded()
+        if maskedRadius == radius, backdrop.maskImage != nil { return }
+        maskedRadius = radius
+        let cap = radius + 1
         let side = cap * 2 + 1
         let image = NSImage(size: CGSize(width: side, height: side), flipped: false) { rect in
-            guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
-            guard edge > 0,
-                  let horizontal = NSGradient(colorsAndLocations: (.clear, 0), (.black, edge / side), (.black, 1 - edge / side), (.clear, 1)),
-                  let vertical = NSGradient(colorsAndLocations: (.clear, 0), (.black, edge / side), (.black, 1 - edge / side), (.clear, 1))
-            else {
-                NSColor.black.setFill()
-                rect.fill()
-                return true
-            }
-            horizontal.draw(in: rect, angle: 0)
-            // Keep only what both fades keep: a soft edge all around.
-            context.setBlendMode(.destinationIn)
-            vertical.draw(in: rect, angle: 90)
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
             return true
         }
         image.capInsets = NSEdgeInsets(top: cap, left: cap, bottom: cap, right: cap)
@@ -405,7 +396,8 @@ final class LyricsWindowController {
     private func applyLook() {
         let look = sing.appearance
         container?.apply(look)
-        panel?.hasShadow = look.shadow && (look.opacity >= 0.1 || look.blur >= 0.1)
+        // Liquid Glass has its own depth; the fallback's frosted card gets the window's shadow.
+        panel?.hasShadow = !LiquidGlass.isAvailable
         panel?.invalidateShadow()
     }
 

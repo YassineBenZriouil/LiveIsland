@@ -189,7 +189,7 @@ public enum LyricsGeometry {
 /// Where the card's tuning panel goes: under the card, its right edges lined up, else above it
 /// when there's no room below, always on the screen.
 public enum LyricsTuning {
-    public static let size = CGSize(width: 290, height: 540)
+    public static let size = CGSize(width: 290, height: 520)
     public static let gap: CGFloat = 6
 
     public static func frame(size: CGSize = size, card: CGRect, within bounds: CGRect) -> CGRect {

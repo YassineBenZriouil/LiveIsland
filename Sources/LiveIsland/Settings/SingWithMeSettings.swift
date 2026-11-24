@@ -48,10 +48,13 @@ struct SingWithMeSettings: View {
     // MARK: - Sections
 
     private var background: some View {
-        Section("Background") {
-            slider("Blur", value: $sing.appearance.blur, in: 0...1, label: percent(sing.appearance.blur, none: "None", full: "Full"))
-            slider("Opacity", value: $sing.appearance.opacity, in: 0...1, label: percent(sing.appearance.opacity))
-            Picker("Colour", selection: $sing.appearance.background) {
+        Section("Glass") {
+            Picker("Glass", selection: $sing.appearance.glass) {
+                ForEach(LyricsAppearance.GlassStyle.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            slider("Tint", value: $sing.appearance.tint, in: 0...1, label: percent(sing.appearance.tint, none: "None", full: "Full"))
+            Picker("Tint colour", selection: $sing.appearance.background) {
                 ForEach(LyricsAppearance.Background.allCases) { Text($0.title).tag($0) }
             }
             if sing.appearance.background == .custom {
@@ -59,8 +62,10 @@ struct SingWithMeSettings: View {
                                                                 set: { sing.appearance.customColor = LyricsColor($0) }),
                             supportsOpacity: false)
             }
-            Text("No blur and no opacity leave the words floating on your screen, with a soft shadow so they stay readable.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
+            Text(LiquidGlass.isAvailable
+                 ? "Liquid Glass: frosted blurs what's behind the card, clear keeps it sharp. Clear glass with no tint leaves the words floating, with a soft shadow so they stay readable."
+                 : "Frosted blurs what's behind the card, clear blurs it less. Liquid Glass comes with macOS 26.")
+                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -105,11 +110,7 @@ struct SingWithMeSettings: View {
         Section("Shape") {
             slider("Corners", value: $sing.appearance.cornerRadius, in: LyricsAppearance.cornerRange, step: 1,
                    label: "\(Int(sing.appearance.cornerRadius)) pt")
-            slider("Soft edges", value: $sing.appearance.edgeFade, in: 0...1,
-                   label: percent(sing.appearance.edgeFade, none: "None", full: "Strong"))
-            Toggle("Shadow", isOn: $sing.appearance.shadow)
-            Text("Soft edges fade the card out the same way on all four sides.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
+            Toggle("Shadow under the words", isOn: $sing.appearance.shadow)
         }
     }
 
@@ -246,7 +247,7 @@ private struct LyricsPreview: View {
                 }
             }
             ZStack {
-                LyricsSurface(look: look, artwork: nil, materialBlur: true)
+                LyricsSurface(look: look, artwork: nil, materialFallback: true)
                 VStack(alignment: look.alignment.horizontal, spacing: layout.fontSize * 0.32) {
                     ForEach(Array(range), id: \.self) { index in
                         LyricLineView(line: lines[index], index: index, current: 1,
@@ -257,14 +258,11 @@ private struct LyricsPreview: View {
                     }
                 }
                 .foregroundStyle(Color(look.resolvedCurrentColor))
-                .padding(.vertical, max(LyricsTypography.padding(panel: shown),
-                                        CGFloat(look.softEdge(for: Double(shown.width), Double(shown.height))) * 0.6))
-                .padding(.horizontal, max(10, CGFloat(look.softEdge(for: Double(shown.width), Double(shown.height))) * 0.6 + 4))
+                .padding(.vertical, LyricsTypography.padding(panel: shown))
+                .padding(.horizontal, max(10, CGFloat(look.cornerRadius) * 0.5))
+                .clipShape(RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous))
             }
             .frame(width: shown.width, height: shown.height)
-            .mask(SoftEdges(look: look, size: shown))
-            .clipShape(RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous))
-            .shadow(color: .black.opacity(look.shadow && (look.opacity >= 0.1 || look.blur >= 0.1) ? 0.35 : 0), radius: 10, y: 4)
             .environment(\.colorScheme, look.hasLightBackground ? .light : .dark)
         }
         .frame(height: max(shown.height + 40, 120))

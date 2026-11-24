@@ -409,12 +409,14 @@ struct LyricsAppearanceTests {
         #expect(look.lines == .three)
         #expect(abs(look.otherLinesOpacity - 0.38) < 0.01, "other lines clearly dimmer than the one sung")
         #expect(look.resolvedCurrentColor == .white)
-        #expect(look.blur > 0 && look.opacity > 0)
+        #expect(look.glass == .regular, "frosted Liquid Glass")
+        #expect(look.tint > 0 && look.tint < 1)
     }
 
     @Test func savesAndReadsBack() throws {
         var look = LyricsAppearance()
-        look.blur = 1
+        look.glass = .clear
+        look.tint = 0.8
         look.background = .custom
         look.customColor = LyricsColor(red: 0.9, green: 0.9, blue: 0.8)
         look.currentColor = LyricsColor(red: 1, green: 0.8, blue: 0)
@@ -430,9 +432,9 @@ struct LyricsAppearanceTests {
         #expect(LyricsAppearance.decode(nil) == .standard)
         #expect(LyricsAppearance.decode(Data("not json".utf8)) == .standard)
         #expect(LyricsAppearance.decode(Data("{}".utf8)) == .standard, "an old value with nothing in it")
-        let mixed = LyricsAppearance.decode(Data(#"{"blur":7,"opacity":-1,"weight":"ultra","cornerRadius":99,"lines":"two","dimming":"lots"}"#.utf8))
-        #expect(mixed.blur == 1)
-        #expect(mixed.opacity == 0)
+        let mixed = LyricsAppearance.decode(Data(#"{"glass":"milky","tint":7,"weight":"ultra","cornerRadius":99,"lines":"two","dimming":"lots"}"#.utf8))
+        #expect(mixed.glass == .regular, "an unknown glass is the default")
+        #expect(mixed.tint == 1)
         #expect(mixed.weight == .bold, "an unknown weight is the default")
         #expect(mixed.cornerRadius == 40)
         #expect(mixed.lines == .two, "the good values stay")
@@ -447,9 +449,9 @@ struct LyricsAppearanceTests {
         var look = LyricsAppearance()
         look.background = .light
         #expect(look.resolvedCurrentColor == .black)
-        look.opacity = 0.1
+        look.tint = 0.1
         #expect(look.resolvedCurrentColor == .white, "barely there, it's the desktop behind that counts")
-        look.opacity = 1
+        look.tint = 1
         look.background = .custom
         look.customColor = LyricsColor(red: 0.1, green: 0.1, blue: 0.3)
         #expect(look.resolvedCurrentColor == .white)
@@ -461,11 +463,11 @@ struct LyricsAppearanceTests {
         var look = LyricsAppearance()
         look.shadow = false
         #expect(!look.needsTextShadow)
-        look.blur = 0
-        look.opacity = 0
+        look.glass = .clear
+        look.tint = 0
         #expect(look.needsTextShadow, "floating words stay readable")
-        look.edgeFade = 0
-        #expect(look.softEdge(for: 151, 68) == 0)
+        look.glass = .regular
+        #expect(!look.needsTextShadow, "frosted glass is enough behind the words")
     }
 
     @Test func theLineFillsFromItsStartToTheNext() throws {
@@ -506,28 +508,35 @@ struct LyricsAppearanceTests {
     }
 }
 
-@Suite("Sing With Me: soft edges and tuning")
-struct LyricsSoftEdgeTests {
-    @Test func softEdgesAreTheSameOnEverySide() {
-        let look = LyricsAppearance()
-        let small = look.softEdge(for: 151, 68)
-        #expect(small > 5 && small < 15, "a few points, from the shorter side")
-        #expect(look.softEdge(for: 68, 151) == small, "the same whichever way round")
-        var strong = look
-        strong.edgeFade = 1
-        #expect(strong.softEdge(for: 151, 68) <= 68 * 0.45, "never past the middle")
-        #expect(look.softEdge(for: 0, 68) == 0)
-    }
-
+@Suite("Sing With Me: glass and tuning")
+struct LyricsGlassTests {
     @Test func oldSavedLooksStillRead() {
-        let old = Data(#"{"blur":0.3,"border":true,"drift":false,"edgeFade":0.5,"animation":"fade"}"#.utf8)
+        let old = Data(#"{"blur":0.3,"opacity":0.7,"border":true,"drift":false,"edgeFade":0.5,"animation":"fade"}"#.utf8)
         let look = LyricsAppearance.decode(old)
-        #expect(look.blur == 0.3)
-        #expect(look.edgeFade == 0.5)
+        #expect(look.glass == .clear, "a light blur becomes clear glass")
+        #expect(look.tint == 0.7, "the background's opacity becomes the tint")
         #expect(look.lineAnimation == .slideUp, "an old key name takes the default")
         let saved = String(decoding: look.encoded() ?? Data(), as: UTF8.self)
         #expect(!saved.contains("drift"))
         #expect(!saved.contains("border"))
+        #expect(!saved.contains("blur"))
+        #expect(!saved.contains("edgeFade"))
+    }
+
+    @Test func oldBlurAndOpacityBecomeGlass() {
+        #expect(LyricsAppearance.migrated(blur: 0.6, opacity: 0.55) == (.regular, 0.55), "the old default: frosted")
+        #expect(LyricsAppearance.migrated(blur: 1, opacity: 0) == (.regular, 0))
+        #expect(LyricsAppearance.migrated(blur: 0.34, opacity: 0.2) == (.clear, 0.2))
+        #expect(LyricsAppearance.migrated(blur: 0, opacity: 0) == (.clear, 0), "no blur, no background: clear glass")
+        #expect(LyricsAppearance.migrated(blur: nil, opacity: nil) == (.regular, LyricsAppearance.standard.tint))
+        #expect(LyricsAppearance.migrated(blur: .nan, opacity: 3) == (.regular, 1))
+        let old = LyricsAppearance.decode(Data(#"{"blur":0.05,"opacity":0.1,"lines":"one"}"#.utf8))
+        #expect(old.glass == .clear)
+        #expect(old.tint == 0.1)
+        #expect(old.lines == .one)
+        let new = LyricsAppearance.decode(Data(#"{"glass":"regular","tint":0.3,"blur":0,"opacity":0.9}"#.utf8))
+        #expect(new.glass == .regular, "a saved glass wins over leftovers")
+        #expect(new.tint == 0.3)
     }
 
     @Test func tuningOpensUnderTheCardOrAbove() {

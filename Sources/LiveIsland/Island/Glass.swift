@@ -27,3 +27,28 @@ extension View {
         }
     }
 }
+
+/// Sing With Me's glass: real Liquid Glass on macOS 26, frosted or clear, tinted with the
+/// card's colour. Earlier systems get a plain tint here; the card's window adds a blur
+/// behind it, and Settings' preview a material.
+extension View {
+    @ViewBuilder
+    func lyricsGlass<S: Shape>(clear: Bool, tint: Color, in shape: S, interactive: Bool = false,
+                               materialFallback: Bool = false) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect((clear ? Glass.clear : Glass.regular).tint(tint).interactive(interactive), in: shape)
+        } else if materialFallback {
+            background(shape.fill(tint)).background(clear ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(.regularMaterial), in: shape)
+        } else {
+            background(shape.fill(tint))
+        }
+    }
+}
+
+/// Whether this Mac draws Liquid Glass.
+enum LiquidGlass {
+    static var isAvailable: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
+}

@@ -92,10 +92,21 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
         }
     }
 
-    /// 0: no blur at all; 1: strong frosted glass.
-    public var blur: Double = 0.6
-    /// How solid the background colour is, 0 to 1.
-    public var opacity: Double = 0.55
+    /// Liquid Glass's two looks.
+    public enum GlassStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+        /// Frosted: what's behind is blurred.
+        case regular
+        /// See-through: what's behind stays sharp, bent at the edges.
+        case clear
+
+        public var id: String { rawValue }
+        public var title: String { self == .regular ? "Frosted" : "Clear" }
+    }
+
+    public var glass: GlassStyle = .regular
+    /// How strongly the glass is tinted with the background colour, 0 to 1.
+    public var tint: Double = 0.4
+    /// Where the tint comes from.
     public var background: Background = .artwork
     public var customColor: LyricsColor = LyricsColor(red: 0.2, green: 0.1, blue: 0.35)
     /// Times the size that fits the card.
@@ -109,9 +120,8 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
     public var alignment: LyricsAlignment = .center
     public var lines: LyricsLineCount = .three
     public var cornerRadius: Double = 16
+    /// A soft shadow under the words. The glass has its own depth.
     public var shadow = true
-    /// Soft edges: how much the card fades out toward all four of its edges, 0 to 1.
-    public var edgeFade: Double = 0.35
     public var lineAnimation: LineAnimation = .slideUp
     public var position: LyricsPosition = .underNotch
 
@@ -121,10 +131,37 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case blur, opacity, background, customColor, textScale, weight, currentColor, dimming, highlight, alignment, lines
-        // Values saved by earlier versions may also hold "border" and "drift", which are
-        // no longer settings: they're ignored.
-        case cornerRadius, shadow, edgeFade, lineAnimation, position
+        case glass, tint, background, customColor, textScale, weight, currentColor, dimming, highlight, alignment, lines
+        case cornerRadius, shadow, lineAnimation, position
+        // Values saved by earlier versions may also hold "border", "drift" and "edgeFade",
+        // which are no longer settings, and "blur" and "opacity", which became the glass.
+        case blur, opacity
+    }
+
+    /// The glass for a look saved before there was glass: a blur of at least a third was
+    /// frosted, less was see-through; the background's opacity becomes the tint.
+    public static func migrated(blur: Double?, opacity: Double?) -> (GlassStyle, Double) {
+        let style: GlassStyle = (blur.map { $0.isFinite ? $0 : 1 } ?? 1) >= 0.35 ? .regular : .clear
+        return (style, opacity.flatMap { $0.isFinite ? min(max($0, 0), 1) : nil } ?? standard.tint)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(glass, forKey: .glass)
+        try c.encode(tint, forKey: .tint)
+        try c.encode(background, forKey: .background)
+        try c.encode(customColor, forKey: .customColor)
+        try c.encode(textScale, forKey: .textScale)
+        try c.encode(weight, forKey: .weight)
+        try c.encodeIfPresent(currentColor, forKey: .currentColor)
+        try c.encode(dimming, forKey: .dimming)
+        try c.encode(highlight, forKey: .highlight)
+        try c.encode(alignment, forKey: .alignment)
+        try c.encode(lines, forKey: .lines)
+        try c.encode(cornerRadius, forKey: .cornerRadius)
+        try c.encode(shadow, forKey: .shadow)
+        try c.encode(lineAnimation, forKey: .lineAnimation)
+        try c.encode(position, forKey: .position)
     }
 
     public init(from decoder: Decoder) throws {
@@ -132,8 +169,12 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
         let d = LyricsAppearance.standard
         // One bad value spoils only itself.
         func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T { (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback }
-        blur = value(.blur, d.blur)
-        opacity = value(.opacity, d.opacity)
+        if c.contains(.glass) || c.contains(.tint) {
+            glass = value(.glass, d.glass)
+            tint = value(.tint, d.tint)
+        } else if c.contains(.blur) || c.contains(.opacity) {
+            (glass, tint) = Self.migrated(blur: value(.blur, nil as Double?), opacity: value(.opacity, nil as Double?))
+        }
         background = value(.background, d.background)
         customColor = value(.customColor, d.customColor)
         textScale = value(.textScale, d.textScale)
@@ -145,7 +186,6 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
         lines = value(.lines, d.lines)
         cornerRadius = value(.cornerRadius, d.cornerRadius)
         shadow = value(.shadow, d.shadow)
-        edgeFade = value(.edgeFade, d.edgeFade)
         lineAnimation = value(.lineAnimation, d.lineAnimation)
         position = value(.position, d.position)
         self = clamped()
@@ -158,12 +198,10 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
         func fit(_ value: Double, _ range: ClosedRange<Double>, _ fallback: Double) -> Double {
             value.isFinite ? min(max(value, range.lowerBound), range.upperBound) : fallback
         }
-        copy.blur = fit(blur, 0...1, d.blur)
-        copy.opacity = fit(opacity, 0...1, d.opacity)
+        copy.tint = fit(tint, 0...1, d.tint)
         copy.textScale = fit(textScale, LyricsTypography.scaleRange, d.textScale)
         copy.dimming = fit(dimming, 0...1, d.dimming)
         copy.cornerRadius = fit(cornerRadius, Self.cornerRange, d.cornerRadius)
-        copy.edgeFade = fit(edgeFade, 0...1, d.edgeFade)
         return copy
     }
 
@@ -176,10 +214,10 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
         return appearance
     }
 
-    /// Whether the background is light enough to need dark words (only a light or a light
-    /// custom background that shows at all).
+    /// Whether the glass is tinted light enough to need dark words (only a light or a light
+    /// custom tint that's strong enough to show).
     public var hasLightBackground: Bool {
-        guard opacity >= 0.35 else { return false }
+        guard tint >= 0.35 else { return false }
         switch background {
         case .light: return true
         case .custom: return customColor.isLight
@@ -195,16 +233,9 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
     /// How bright the lines that aren't being sung are, from the dimming.
     public var otherLinesOpacity: Double { 1 - 0.85 * dimming }
 
-    /// With no blur and next to no background, the words float on whatever is behind them:
-    /// they keep a soft shadow, even with shadows off, so they stay readable.
-    public var needsTextShadow: Bool { shadow || (blur < 0.1 && opacity < 0.15) }
-
-    /// How far in from every edge the soft edge reaches, in points: the same on all four
-    /// sides, a share of the card's shorter side, and never past its middle.
-    public func softEdge(for width: Double, _ height: Double) -> Double {
-        let shorter = max(0, min(width, height))
-        return min(edgeFade * 0.45 * shorter, shorter * 0.45)
-    }
+    /// On clear, barely tinted glass the words sit on whatever is behind them: they keep a
+    /// soft shadow, even with shadows off, so they stay readable.
+    public var needsTextShadow: Bool { shadow || (glass == .clear && tint < 0.15) }
 
     /// Bigger or smaller words, by tenths, within range.
     public mutating func changeTextScale(by step: Double) {

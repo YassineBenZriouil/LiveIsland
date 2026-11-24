@@ -122,7 +122,7 @@ The island's **Accounts** tab has the same switch, with each tool's **Auto** but
 - Any app that plays audio or video; Spotify and Music read directly, so a paused Spotify stays one tap away while a video plays
 - A real waveform that moves with the music (macOS 14.2+), a glow from the cover, scrubbing, ±15 s, Up Next and Recently Played
 - System volume and output device under the player
-- **Sing With Me** (off until you turn it on): the song's lyrics in time with it, in a small lyrics card under the notch, any size and look you like. The line being sung fills in white as it's sung, like Spotify; drag the card's edges to resize it, drag it anywhere, and pick its blur, colours, words and shape in **Settings › Media**; click a line to jump there
+- **Sing With Me** (off until you turn it on): the song's lyrics in time with it, in a small lyrics card under the notch, any size and look you like. The line being sung fills in white as it's sung, like Spotify; drag the card's edges to resize it, drag it anywhere, and pick its Liquid Glass (frosted or clear, tinted from the cover or any colour), words and shape in **Settings › Media**; click a line to jump there
 
 **Everything else**
 - Calls (FaceTime, Zoom, Teams, Discord, Slack…), which app uses the microphone, whether the camera is on

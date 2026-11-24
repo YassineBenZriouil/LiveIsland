@@ -46,28 +46,6 @@ extension LyricsAlignment {
     var unit: UnitPoint { self == .left ? .leading : self == .right ? .trailing : .center }
 }
 
-/// Soft edges: the card fades out the same distance in from all four of its edges.
-struct SoftEdges: View {
-    let look: LyricsAppearance
-    let size: CGSize
-
-    var body: some View {
-        let edge = look.softEdge(for: Double(size.width), Double(size.height))
-        if edge > 0, size.width > 0, size.height > 0 {
-            gradient(edge / Double(size.width), .leading, .trailing)
-                .mask(gradient(edge / Double(size.height), .top, .bottom))
-        } else {
-            Color.black
-        }
-    }
-
-    private func gradient(_ reach: Double, _ start: UnitPoint, _ end: UnitPoint) -> LinearGradient {
-        LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: reach),
-                               .init(color: .black, location: 1 - reach), .init(color: .clear, location: 1)],
-                       startPoint: start, endPoint: end)
-    }
-}
-
 /// Sing With Me's card: the words of the song, the line being sung bright and filling in as
 /// it's sung, the others dimmed, on whatever background the person chose. A small card shows
 /// its buttons only while the pointer is on it; a big one has a header with the track.
@@ -85,7 +63,7 @@ struct LyricsView: View {
         let header = window.header
         let shape = RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
         ZStack(alignment: .top) {
-            LyricsSurface(look: look, artwork: model.artwork(for: sing.track), materialBlur: false)
+            LyricsSurface(look: look, artwork: model.artwork(for: sing.track), materialFallback: false)
             VStack(spacing: 0) {
                 if big {
                     LyricsHeader(sing: sing, window: window, model: model, actions: actions, layout: header)
@@ -107,10 +85,10 @@ struct LyricsView: View {
                         .allowsHitTesting(false)
                 }
             }
+            // The words stay inside the card; the glass keeps its own edge, unclipped.
+            .clipShape(shape)
         }
         .frame(width: size.width, height: size.height)
-        .mask(SoftEdges(look: look, size: size))
-        .clipShape(shape)
         .contentShape(shape)
         .overlay(alignment: window.controlsAtTop ? .topTrailing : .bottomTrailing) {
             if !big {
@@ -130,35 +108,22 @@ struct LyricsView: View {
     }
 }
 
-/// The card's background: the chosen colour at the chosen opacity (the cover's, deepened, by
-/// default), filling the whole card. The blur of what's behind the window is the window's
-/// own; the Settings preview stands in for it with a material.
+/// The card's background: Liquid Glass in the card's shape (frosted or clear), tinted with
+/// the chosen colour (the cover's, deepened, by default). Before macOS 26 it's the tint over
+/// the window's frosted backdrop, or over a material in Settings' preview.
 struct LyricsSurface: View {
     let look: LyricsAppearance
     let artwork: ArtworkLook?
-    /// Draws the blur in SwiftUI (Settings' preview) instead of the window's backdrop.
-    let materialBlur: Bool
+    /// Settings' preview has no window backdrop behind it: a material stands in before macOS 26.
+    let materialFallback: Bool
 
     var body: some View {
-        ZStack {
-            if materialBlur, look.blur > 0.02 {
-                Rectangle().fill(look.blur > 0.7 ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.ultraThinMaterial)).opacity(look.blur)
-            }
-            Rectangle().fill(color.opacity(look.opacity))
-            if look.background == .artwork, look.opacity > 0.05, let image = artwork?.image {
-                // In an overlay, so a cover of another shape never makes the card bigger.
-                Color.clear.overlay {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .blur(radius: 40)
-                        .opacity(0.35 * look.opacity)
-                }
-                .clipped()
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .allowsHitTesting(false)
+        Color.clear
+            .lyricsGlass(clear: look.glass == .clear, tint: color.opacity(look.tint),
+                         in: RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous),
+                         materialFallback: materialFallback)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
     }
 
     private var color: Color {
@@ -180,7 +145,7 @@ private struct HoverControls: View {
     let actions: LyricsActions
 
     var body: some View {
-        HStack(spacing: 4) {
+        CardIconButtons {
             CardIconButton(window: window, id: "tune", symbol: "slider.horizontal.3", isOn: window.isTuning,
                            help: "Size, look and timing", action: actions.tune)
             CardIconButton(window: window, id: "close", symbol: "xmark", help: "Close Sing With Me (Esc)", action: actions.close)
@@ -188,8 +153,22 @@ private struct HoverControls: View {
     }
 }
 
-/// Every icon button on the card and its tuning panel: one size, and one hover look (it grows
-/// a little and its circle lights up), toned down to the light alone under Reduce Motion.
+/// A row of card buttons: on macOS 26, one glass container, so their glass blends together.
+struct CardIconButtons<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if #available(macOS 26, *) {
+            GlassEffectContainer(spacing: 6) { HStack(spacing: 4) { content() } }
+        } else {
+            HStack(spacing: 4) { content() }
+        }
+    }
+}
+
+/// Every icon button on the card and its tuning panel: one size, one glass circle (a dark
+/// one before macOS 26), and one hover look (it grows a little and lights up), toned down
+/// to the light alone under Reduce Motion.
 /// Hover comes from an AppKit tracking area, which works in a panel that never becomes key.
 struct CardIconButton: View {
     @ObservedObject var window: LyricsWindowState
@@ -207,10 +186,9 @@ struct CardIconButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(LiquidGlass.isAvailable ? Color.primary : .white)
                 .frame(width: Self.size, height: Self.size)
-                .background(Circle().fill(.black.opacity(isOn || hovered ? 0.8 : 0.55)))
-                .background(Circle().fill(.white.opacity(hovered ? 0.22 : 0)).padding(-2))
+                .modifier(CircleGlass(lit: hovered || isOn))
                 .scaleEffect(hovered && !reduceMotion ? 1.15 : 1)
                 .animation(Motion.animation(.spring(response: 0.22, dampingFraction: 0.7), reduced: reduceMotion), value: hovered)
                 .contentShape(Circle())
@@ -219,6 +197,20 @@ struct CardIconButton: View {
         .background(HoverTracker { inside in window.setHovered(id, inside) })
         .help(help)
         .accessibilityLabel(help)
+    }
+}
+
+/// A button's circle: tinted glass that brightens when lit, or a dark disc before macOS 26.
+private struct CircleGlass: ViewModifier {
+    let lit: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content.glassEffect(Glass.regular.tint(.white.opacity(lit ? 0.3 : 0.04)).interactive(), in: Circle())
+        } else {
+            content.background(Circle().fill(.black.opacity(lit ? 0.8 : 0.55)))
+                .background(Circle().fill(.white.opacity(lit ? 0.22 : 0)).padding(-2))
+        }
     }
 }
 
@@ -269,7 +261,7 @@ private struct LyricsHeader: View {
                 .frame(maxWidth: max(0, layout.leadingWidth - padding - 8), alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: layout.gap.map { $0.upperBound - $0.lowerBound } ?? 12)
-            HStack(spacing: 4) {
+            CardIconButtons {
                 CardIconButton(window: window, id: "tune", symbol: "slider.horizontal.3", isOn: window.isTuning,
                                help: "Size, look and timing", action: actions.tune)
                 CardIconButton(window: window, id: "close", symbol: "xmark", help: "Close Sing With Me (Esc)", action: actions.close)
@@ -311,7 +303,6 @@ private struct LyricsBody: View {
     var body: some View {
         let layout = LyricsTypography.layout(panel: size, lines: look.lines, scale: look.textScale)
         let color = Color(look.resolvedCurrentColor)
-        let edge = CGFloat(look.softEdge(for: Double(size.width), Double(size.height)))
         Group {
             if !sing.isEnabled {
                 SingWithMeOptIn(sing: sing)
@@ -325,9 +316,8 @@ private struct LyricsBody: View {
             // Without words the card is hidden; nothing to say here as it fades.
         }
         .foregroundStyle(color)
-        // Clear of the soft edges, so the words don't fade with them.
-        .padding(.vertical, max(LyricsTypography.padding(panel: size), edge * 0.6))
-        .padding(.horizontal, max(10, edge * 0.6 + 4))
+        .padding(.vertical, LyricsTypography.padding(panel: size))
+        .padding(.horizontal, max(10, CGFloat(look.cornerRadius) * 0.5))
     }
 }
 
