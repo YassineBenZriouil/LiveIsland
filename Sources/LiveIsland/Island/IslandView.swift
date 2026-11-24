@@ -168,6 +168,7 @@ struct CompactIsland: View {
         case .agentWorking(let kind, let project, _): return "working-\(kind)-\(project)"
         case .headphonesConnected: return "headphones"
         case .charging: return "charging"
+        case .lowBattery(let device, _): return "low-\(device ?? "mac")"
         case .eventSoon(let title, _): return "event-\(title)"
         case .cameraOn: return "camera"
         case .microphoneOn: return "microphone"
@@ -197,6 +198,12 @@ struct CompactIsland: View {
             Image(systemName: HeadphoneSymbol.name(for: name)).foregroundStyle(.white)
         case .charging:
             Image(systemName: "bolt.fill").foregroundStyle(.green).symbolEffect(.pulse)
+        case .lowBattery(let device, _):
+            if let device {
+                Image(systemName: HeadphoneSymbol.name(for: device)).foregroundStyle(.white)
+            } else {
+                Image(systemName: "battery.25percent").foregroundStyle(.red)
+            }
         case .eventSoon:
             Image(systemName: "calendar").foregroundStyle(.red)
         case .cameraOn:
@@ -241,6 +248,8 @@ struct CompactIsland: View {
             }
         case .charging(let percent):
             Text("\(percent)%").foregroundStyle(.green).monospacedDigit()
+        case .lowBattery(_, let percent):
+            Text("\(percent)%").foregroundStyle(.red).monospacedDigit()
         case .eventSoon(_, let startsAt):
             TimelineView(.periodic(from: .now, by: 15)) { context in
                 Text(Format.until(startsAt, from: context.date)).foregroundStyle(.red)
