@@ -111,15 +111,15 @@ public enum ClaudeTranscript {
         }
     }
 
-    /// The project's folder name, from the session's working directory.
     /// The folder name Claude Code files a project's transcripts under: the path with every
-    /// character other than a letter or digit turned into "-".
+    /// character other than an ASCII letter or digit turned into "-".
     public static func projectKey(for folder: String) -> String {
         String(folder.unicodeScalars.map { scalar -> Character in
             scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar)) ? Character(scalar) : "-"
         })
     }
 
+    /// The project's folder name, from the session's working directory.
     public static func projectName(cwd: String?, fallback: String) -> String {
         guard let cwd, !cwd.isEmpty else { return fallback }
         return URL(fileURLWithPath: cwd).lastPathComponent

@@ -28,9 +28,11 @@ public struct ClaudeAccountIdentity: Codable, Equatable, Sendable {
         email.lowercased() + "|" + (organization ?? "")
     }
 
-    /// Claude's tiers name Claude ("default_claude_max_20x"); anything else is a ChatGPT plan.
+    /// Claude's tiers name Claude ("default_claude_max_20x") or start with "default_"; anything
+    /// else is a ChatGPT plan. A Claude tier LiveIsland doesn't know never reads as one.
     public var plan: String? {
-        tier?.lowercased().contains("claude") == true ? ClaudePlan.label(tier: tier) : CodexPlan.label(planType: tier)
+        guard let tier else { return nil }
+        return ClaudePlan.isClaudeTier(tier) ? ClaudePlan.label(tier: tier) : CodexPlan.label(planType: tier)
     }
 
     /// What to call the account: the person's name when Claude has one, else the email.
@@ -63,7 +65,23 @@ public enum ClaudePlan {
         if tier.contains("enterprise") { return "Enterprise" }
         if tier.contains("team") { return "Team" }
         if tier.contains("pro") { return "Pro" }
-        return nil
+        return unknownLabel(tier)
+    }
+
+    /// Claude's rate limit tiers, as `~/.claude.json` names them.
+    public static func isClaudeTier(_ tier: String) -> Bool {
+        let tier = tier.lowercased()
+        return tier.contains("claude") || tier.hasPrefix("default_")
+    }
+
+    /// A tier Claude adds later ("default_claude_ultra" -> "Ultra"): its own words, without
+    /// the ones every tier shares. Nil when nothing is left ("default_claude_ai"), rather
+    /// than a made-up plan name.
+    static func unknownLabel(_ tier: String) -> String? {
+        let filler: Set<String> = ["default", "claude", "ai", "tier", "rate", "limit"]
+        let words = tier.lowercased().split { $0 == "_" || $0 == "-" || $0 == " " }.map(String.init).filter { !filler.contains($0) }
+        guard !words.isEmpty else { return nil }
+        return words.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 }
 
@@ -269,7 +287,8 @@ public struct AccountBook: Codable, Equatable, Sendable {
     /// report can't be placed yet.
     @discardableResult
     public mutating func record(_ limits: ClaudeUsageLimits, sessionStartedAt: Date?) -> Bool {
-        if let owner = entries.first(where: { Self.sameWindows($0.value, limits) })?.key {
+        let matching = entries.filter { Self.sameWindows($0.value, limits) }.map(\.key)
+        if let owner = owner(among: matching, sessionStartedAt: sessionStartedAt) {
             store(limits, in: owner)
             return true
         }
@@ -294,10 +313,11 @@ public struct AccountBook: Codable, Equatable, Sendable {
         default: return
         }
         let window = RateLimitWindow(usedPercent: 100, windowMinutes: minutes, resetsAt: notice.resetsAt)
-        let owner = entries.first { entry in
+        let matching = entries.filter { entry in
             let known = window.windowMinutes == 300 ? entry.value.fiveHour : entry.value.sevenDay
             return Self.sameReset(known?.resetsAt, notice.resetsAt)
-        }?.key
+        }.map(\.key)
+        let owner = owner(among: matching, sessionStartedAt: sessionStartedAt)
         let active = Self.belongsToActive(sessionStartedAt: sessionStartedAt, activeSince: activeSince) ? activeKey : nil
         guard let key = owner ?? active, entries[key] != nil else { return }
         if let seen = entries[key]!.limitsObservedAt, seen > notice.observedAt { return }
@@ -327,6 +347,49 @@ public struct AccountBook: Codable, Equatable, Sendable {
         entries[key]!.fiveHour = limits.fiveHour
         entries[key]!.sevenDay = limits.sevenDay
         entries[key]!.limitsObservedAt = limits.observedAt
+    }
+
+    /// Which of the accounts whose reset times a reading matches it belongs to. Windows reset
+    /// on the hour, so two accounts can share one: the account in use wins when the session
+    /// started after the latest switch (then it's certainly that login), else the account
+    /// read most recently, as the one still being used. The key settles a last tie, so the
+    /// answer never depends on a dictionary's order.
+    func owner(among keys: [String], sessionStartedAt: Date?) -> String? {
+        if let activeKey, keys.contains(activeKey),
+           Self.belongsToActive(sessionStartedAt: sessionStartedAt, activeSince: activeSince) {
+            return activeKey
+        }
+        return keys.max { lhs, rhs in
+            let left = entries[lhs]?.limitsObservedAt ?? .distantPast, right = entries[rhs]?.limitsObservedAt ?? .distantPast
+            return left != right ? left < right : lhs > rhs
+        }
+    }
+
+    /// The entry a switcher's row stands for. claude-swap leaves the organization out for
+    /// personal accounts and ccswap never gives one, so the email decides, and when one email
+    /// has several entries (a personal and a team organization), the closest wins: the same
+    /// organization, else one that no other row of that email claims; then one without an
+    /// organization, one whose plan fits the row (a team's for a row with an organization,
+    /// a person's without), one as active as the row is, and the key last, so the pick never
+    /// depends on a dictionary's order.
+    func entry(email: String, organization: String?, isActive: Bool, claimedOrganizations: Set<String>) -> Entry? {
+        let candidates = entries.filter { _, entry in
+            guard entry.identity.email.caseInsensitiveCompare(email) == .orderedSame else { return false }
+            guard let theirs = entry.identity.organizationUUID else { return true }
+            if let organization { return theirs == organization }
+            return !claimedOrganizations.contains(theirs)
+        }
+        func rank(_ key: String, _ entry: Entry) -> [Int] {
+            let organizational: Set<String> = ["Team", "Enterprise", "Business", "Edu"]
+            return [entry.identity.organizationUUID == organization ? 0 : 1,
+                    entry.identity.organizationUUID == nil ? 0 : 1,
+                    organizational.contains(entry.identity.plan ?? "") == (organization != nil) ? 0 : 1,
+                    (key == activeKey) == isActive ? 0 : 1]
+        }
+        return candidates.min { lhs, rhs in
+            let left = rank(lhs.key, lhs.value), right = rank(rhs.key, rhs.value)
+            return left != right ? left.lexicographicallyPrecedes(right) : lhs.key < rhs.key
+        }?.value
     }
 
     /// Whether a session uses the account in use now: only certain when it started after the
@@ -548,15 +611,11 @@ public enum ClaudeSwapJSON {
 }
 
 public enum CodexAccounts {
+    /// The Codex accounts used here, the one in use first. Only those with a saved login can be
+    /// switched to.
     public static func list(book: AccountBook, switching: Bool, now: Date) -> [ClaudeAccount] {
-        book.entries.map { key, entry in
-            ClaudeAccount(identity: entry.identity, kind: .codex, isActive: key == book.activeKey,
-                          fiveHour: entry.fiveHour, sevenDay: entry.sevenDay, limitsObservedAt: entry.limitsObservedAt,
-                          switcher: switching && entry.hasSavedLogin ? .liveIsland : nil)
-                .current(at: now)
-        }
-        .sorted { lhs, rhs in
-            lhs.isActive != rhs.isActive ? lhs.isActive : lhs.identity.email.localizedCaseInsensitiveCompare(rhs.identity.email) == .orderedAscending
+        AccountList.fromBook(book, kind: .codex, now: now, name: \.email) { entry in
+            switching && entry.hasSavedLogin ? .liveIsland : nil
         }
     }
 }
@@ -568,45 +627,92 @@ public enum ClaudeAccounts {
     /// Claude Code has used here, with their limits.
     public static func merge(book: AccountBook, claudeSwap: [ClaudeSwapAccount]?, switcher: ClaudeAccount.Switcher?,
                              now: Date) -> [ClaudeAccount] {
-        if let claudeSwap, !claudeSwap.isEmpty {
-            return claudeSwap.sorted { $0.number < $1.number }.map { swap in
-                // claude-swap leaves the organization out for personal accounts: then the email decides.
-                let known = book.entries.values.first { entry in
-                    entry.identity.email.caseInsensitiveCompare(swap.email) == .orderedSame
-                        && (swap.organizationUUID == nil || entry.identity.organizationUUID == nil || entry.identity.organizationUUID == swap.organizationUUID)
-                }
-                var identity = known?.identity ?? ClaudeAccountIdentity(accountUUID: "", email: swap.email,
-                                                                        organizationUUID: swap.organizationUUID,
-                                                                        organizationName: swap.organizationName)
-                identity.email = known?.identity.email ?? swap.email.lowercased()
-                if let alias = swap.alias { identity.name = alias }
-                var account = ClaudeAccount(identity: identity, isActive: swap.isActive, fiveHour: swap.fiveHour,
-                                            sevenDay: swap.sevenDay, limitsObservedAt: swap.usageFetchedAt ?? now,
-                                            switcher: .claudeSwap)
-                account.claudeSwapNumber = swap.number
-                account.needsLogin = swap.needsLogin
-                account.models = swap.models
-                // The status line reports the account in use as it works; claude-swap polls every few minutes.
-                if let known, swap.isActive, let observed = known.limitsObservedAt, observed > (swap.usageFetchedAt ?? .distantPast),
-                   known.fiveHour != nil || known.sevenDay != nil {
-                    // A newer report of the week without 5 hours: the plan has no 5-hour limit
-                    // (any more), so claude-swap's older 5-hour number must not linger.
-                    account.fiveHour = known.sevenDay != nil ? known.fiveHour : known.fiveHour ?? account.fiveHour
-                    account.sevenDay = known.sevenDay ?? account.sevenDay
-                    account.limitsObservedAt = observed
-                }
-                return account.current(at: now)
-            }
-            .sorted { lhs, rhs in lhs.isActive != rhs.isActive ? lhs.isActive : (lhs.claudeSwapNumber ?? 0) < (rhs.claudeSwapNumber ?? 0) }
+        if let claudeSwap, !claudeSwap.isEmpty { return AccountList.fromSwitcher(claudeSwap, book: book, now: now) }
+        return AccountList.fromBook(book, kind: .claude, now: now, name: \.displayName) { _ in
+            switcher == .claudeSwap ? nil : switcher
         }
-        return book.entries.map { key, entry in
-            ClaudeAccount(identity: entry.identity, isActive: key == book.activeKey,
+    }
+}
+
+/// One account as a switcher (claude-swap, ccswap) lists it. Both show accounts the same way:
+/// exactly the switcher's, the one in use first, with what LiveIsland saw of each filling in.
+protocol SwitcherRow {
+    var number: Int { get }
+    var email: String { get }
+    /// Nil for a personal account, and always for ccswap, which doesn't say.
+    var organizationUUID: String? { get }
+    var isActive: Bool { get }
+    /// When the switcher read its usage.
+    var readingAt: Date? { get }
+    /// The account as the switcher reports it, as `known` (LiveIsland's own entry) names it.
+    func account(known: ClaudeAccountIdentity?, now: Date) -> ClaudeAccount
+}
+
+/// How the island lists accounts, for Claude Code and Codex alike.
+enum AccountList {
+    /// The accounts the book knows, the one in use first, then by `name`.
+    static func fromBook(_ book: AccountBook, kind: AgentKind, now: Date, name: (ClaudeAccountIdentity) -> String,
+                         switcher: (AccountBook.Entry) -> ClaudeAccount.Switcher?) -> [ClaudeAccount] {
+        book.entries.map { key, entry in
+            ClaudeAccount(identity: entry.identity, kind: kind, isActive: key == book.activeKey,
                           fiveHour: entry.fiveHour, sevenDay: entry.sevenDay, limitsObservedAt: entry.limitsObservedAt,
-                          switcher: switcher == .claudeSwap ? nil : switcher)
+                          switcher: switcher(entry))
                 .current(at: now)
         }
         .sorted { lhs, rhs in
-            lhs.isActive != rhs.isActive ? lhs.isActive : lhs.identity.displayName.localizedCaseInsensitiveCompare(rhs.identity.displayName) == .orderedAscending
+            if lhs.isActive != rhs.isActive { return lhs.isActive }
+            let order = name(lhs.identity).localizedCaseInsensitiveCompare(name(rhs.identity))
+            return order != .orderedSame ? order == .orderedAscending : lhs.id < rhs.id
         }
+    }
+
+    /// Exactly the switcher's accounts, the one in use first, then in its order. The book's
+    /// entry for each (matched as `AccountBook.entry` explains) fills in who it is, and its
+    /// reading of the account in use when that's newer.
+    static func fromSwitcher<Row: SwitcherRow>(_ rows: [Row], book: AccountBook, now: Date) -> [ClaudeAccount] {
+        var claimed: [String: Set<String>] = [:]
+        for row in rows {
+            if let organization = row.organizationUUID { claimed[row.email.lowercased(), default: []].insert(organization) }
+        }
+        return rows.map { row -> (number: Int, account: ClaudeAccount) in
+            let known = book.entry(email: row.email, organization: row.organizationUUID, isActive: row.isActive,
+                                   claimedOrganizations: claimed[row.email.lowercased()] ?? [])
+            var account = row.account(known: known?.identity, now: now)
+            account.takeFresherReading(from: known, than: row.readingAt)
+            return (row.number, account.current(at: now))
+        }
+        .sorted { lhs, rhs in lhs.account.isActive != rhs.account.isActive ? lhs.account.isActive : lhs.number < rhs.number }
+        .map(\.account)
+    }
+}
+
+extension ClaudeAccount {
+    /// Claude Code's status line and Codex's sessions report the account in use as it works;
+    /// a switcher polls every few minutes. The newer reading of the account in use wins. A
+    /// newer report of the week without 5 hours means the plan has no 5-hour limit (any
+    /// more), so the switcher's older 5-hour number must not linger.
+    mutating func takeFresherReading(from known: AccountBook.Entry?, than readAt: Date?) {
+        guard isActive, let known, let observed = known.limitsObservedAt, observed > (readAt ?? .distantPast),
+              known.fiveHour != nil || known.sevenDay != nil
+        else { return }
+        fiveHour = known.sevenDay != nil ? known.fiveHour : known.fiveHour ?? fiveHour
+        sevenDay = known.sevenDay ?? sevenDay
+        limitsObservedAt = observed
+    }
+}
+
+extension ClaudeSwapAccount: SwitcherRow {
+    var readingAt: Date? { usageFetchedAt }
+
+    func account(known: ClaudeAccountIdentity?, now: Date) -> ClaudeAccount {
+        var identity = known ?? ClaudeAccountIdentity(accountUUID: "", email: email, organizationUUID: organizationUUID,
+                                                      organizationName: organizationName)
+        identity.email = known?.email ?? email.lowercased()
+        if let alias { identity.name = alias }
+        var account = ClaudeAccount(identity: identity, isActive: isActive, fiveHour: fiveHour, sevenDay: sevenDay,
+                                    limitsObservedAt: usageFetchedAt ?? now, switcher: .claudeSwap,
+                                    needsLogin: needsLogin, claudeSwapNumber: number)
+        account.models = models
+        return account
     }
 }
