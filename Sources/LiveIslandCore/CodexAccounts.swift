@@ -42,7 +42,8 @@ public enum CodexPlan {
         case "team": return "Team"
         case "business": return "Business"
         case "enterprise", "edu": return plan == "edu" ? "Edu" : "Enterprise"
-        default: return plan.capitalized
+        // A plan ChatGPT adds later reads as its words: "self_serve" → "Self Serve".
+        default: return plan.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ").capitalized
         }
     }
 }

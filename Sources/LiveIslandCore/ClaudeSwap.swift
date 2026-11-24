@@ -25,8 +25,38 @@ public enum ClaudeSwapEvent: Equatable, Sendable {
     case configWarning(String)
     case other(String)
 
+    /// Compares what the events say, not how they read: two checks with the same numbers are
+    /// equal however their line is worded, and two different ones never collide on a rounded
+    /// percentage. Only the poll needs spelling out, as its windows are tuples.
     public static func == (lhs: ClaudeSwapEvent, rhs: ClaudeSwapEvent) -> Bool {
-        lhs.summary == rhs.summary && lhs.kind == rhs.kind
+        switch (lhs, rhs) {
+        case let (.poll(lActive, lWindows, lThreshold), .poll(rActive, rWindows, rThreshold)):
+            return lActive == rActive && lThreshold == rThreshold && lWindows.count == rWindows.count
+                && lWindows.allSatisfy { number, window in
+                    guard let other = rWindows[number] else { return false }
+                    return window.fiveHour == other.fiveHour && window.week == other.week && window.models == other.models
+                }
+        case let (.switched(lTrigger, lFrom, lTo, lDryRun), .switched(rTrigger, rFrom, rTo, rDryRun)):
+            return lTrigger == rTrigger && lFrom == rFrom && lTo == rTo && lDryRun == rDryRun
+        case let (.noSwitch(lReason, lDetail), .noSwitch(rReason, rDetail)):
+            return lReason == rReason && lDetail == rDetail
+        case let (.quarantined(lNumber, lEmail, lReason), .quarantined(rNumber, rEmail, rReason)):
+            return lNumber == rNumber && lEmail == rEmail && lReason == rReason
+        case let (.unquarantined(lNumber, lEmail), .unquarantined(rNumber, rEmail)):
+            return lNumber == rNumber && lEmail == rEmail
+        case let (.allExhausted(lReset), .allExhausted(rReset)):
+            return lReset == rReset
+        case let (.sleep(lUntil), .sleep(rUntil)):
+            return lUntil == rUntil
+        case let (.error(lMessage, lTransient), .error(rMessage, rTransient)):
+            return lMessage == rMessage && lTransient == rTransient
+        case let (.configWarning(lMessage), .configWarning(rMessage)):
+            return lMessage == rMessage
+        case let (.other(lKind), .other(rKind)):
+            return lKind == rKind
+        default:
+            return false
+        }
     }
 
     public static func parse(_ line: Data) -> (event: ClaudeSwapEvent, at: Date?)? {
@@ -74,10 +104,7 @@ public enum ClaudeSwapEvent: Equatable, Sendable {
         return (event, at)
     }
 
-    /// claude-swap writes account numbers as numbers or as strings.
-    private static func number(_ value: Any?) -> Int? {
-        (value as? Int) ?? (value as? String).flatMap(Int.init)
-    }
+    private static func number(_ value: Any?) -> Int? { SwitcherOutput.number(value) }
 
     public var kind: String {
         switch self {
@@ -101,14 +128,14 @@ public enum ClaudeSwapEvent: Equatable, Sendable {
         case .poll(let active, let windows, let threshold):
             let parts = windows.keys.sorted().map { number -> String in
                 let window = windows[number]!
-                func percent(_ value: Double?) -> String { value.map { "\(Int($0.rounded()))%" } ?? "–" }
+                func percent(_ value: Double?) -> String { value.map(SwitcherOutput.percent) ?? "–" }
                 // An account without a 5-hour limit shows only its week, not a dash for 5 hours.
                 var text = window.fiveHour == nil && window.week != nil
                     ? "#\(number) week \(percent(window.week))" : "#\(number) \(percent(window.fiveHour))/\(percent(window.week))"
                 for model in window.models.keys.sorted() { text += " \(model) \(percent(window.models[model]))" }
                 return text
             }
-            let line = threshold.map { " · switch at \(Int($0))%" } ?? ""
+            let line = threshold.map { " · switch at \(SwitcherOutput.wholeNumber($0))%" } ?? ""
             return "Checked: on \(name(active)) · \(parts.joined(separator: ", "))\(line)"
         case .switched(let trigger, let from, let to, let dryRun):
             return "\(dryRun ? "Would switch" : "Switched") from \(name(from)) to \(name(to))\(trigger.isEmpty ? "" : " (\(trigger))")"
@@ -168,7 +195,8 @@ public struct ClaudeSwapSetting: Equatable, Sendable {
                 return ClaudeSwapSetting(key: key, value: flag.boolValue ? "true" : "false", isSet: row["isSet"] as? Bool ?? false)
             }
             switch row["value"] {
-            case let number as Double: value = number == number.rounded() ? String(Int(number)) : String(number)
+            // A whole number prints without ".0"; one too big to be exact stays as JSON wrote it.
+            case let number as Double: value = number == number.rounded() && abs(number) < 1e15 ? String(SwitcherOutput.wholeNumber(number)) : String(number)
             case let number as Int: value = String(number)
             case let text as String: value = text
             default: value = ""
@@ -187,11 +215,7 @@ public enum ClaudeSwapCommand {
 
     /// "A newer version of claude-swap is available (0.29.0)" → "0.29.0".
     public static func newerVersion(in output: String) -> String? {
-        guard let range = output.range(of: "newer version of claude-swap is available (") else { return nil }
-        let rest = output[range.upperBound...]
-        guard let end = rest.firstIndex(of: ")") else { return nil }
-        let version = String(rest[..<end])
-        return AppVersion(version) != nil ? version : nil
+        SwitcherOutput.newerVersion(of: "claude-swap", in: output)
     }
 
     /// Splits a typed command into arguments, honoring quotes and backslashes, without a

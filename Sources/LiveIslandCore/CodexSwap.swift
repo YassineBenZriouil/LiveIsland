@@ -40,8 +40,14 @@ public struct CodexSwapAccount: Equatable, Sendable {
         self.usageReadAt = usageReadAt
     }
 
-    /// Its login failed: sign in to it again with codex login, then add it again.
-    public var needsLogin: Bool { usageError?.contains("401") == true }
+    /// Its login failed: sign in to it again with codex login, then add it again. Only a real
+    /// 401 or "unauthorized" counts ("http-401", "HTTP 401 Unauthorized"), never a 401 inside
+    /// another number or word ("timed out after 1401ms").
+    public var needsLogin: Bool {
+        guard let usageError else { return false }
+        return usageError.lowercased().split { !$0.isLetter && !$0.isNumber }
+            .contains { $0 == "401" || $0 == "unauthorized" || $0 == "unauthorised" }
+    }
     public var plan: String? { CodexPlan.label(planType: planType) }
 }
 
@@ -67,7 +73,7 @@ public enum CodexSwapJSON {
                 let windows = reading["usage"] as? [String: Any] ?? [:]
                 account.fiveHour = window(windows["five_hour"], minutes: 300)
                 account.weekly = window(windows["weekly"] ?? windows["seven_day"], minutes: 10_080)
-                account.bankedResets = (windows["reset_credits"] as? [String: Any])?["available"] as? Int
+                account.bankedResets = Self.number((windows["reset_credits"] as? [String: Any])?["available"])
                 account.usageError = (reading["status"] as? String) ?? message(reading["error"])
             }
             return account
@@ -94,10 +100,7 @@ public enum CodexSwapJSON {
         return (value as? [String: Any])?["message"] as? String
     }
 
-    /// ccswap writes account numbers as numbers or as strings.
-    static func number(_ value: Any?) -> Int? {
-        (value as? Int) ?? (value as? String).flatMap(Int.init)
-    }
+    static func number(_ value: Any?) -> Int? { SwitcherOutput.number(value) }
 }
 
 /// One line of `ccswap codex auto --json`. Its events are claude-swap's, except its checks,
@@ -131,8 +134,8 @@ public enum CodexSwapEvent: Equatable, Sendable {
         switch self {
         case .poll(let active, let used, let threshold):
             let name = active?.email ?? active?.number.map { "account \($0)" } ?? "no account"
-            let parts = used.keys.sorted().map { "#\($0) \(Int(used[$0]!.rounded()))%" }
-            let line = threshold.map { " · switch at \(Int($0))%" } ?? ""
+            let parts = used.keys.sorted().map { "#\($0) \(SwitcherOutput.percent(used[$0]!))" }
+            let line = threshold.map { " · switch at \(SwitcherOutput.wholeNumber($0))%" } ?? ""
             return "Checked: on \(name) · \(parts.joined(separator: ", "))\(line)"
         case .swap(let event):
             // Codex reads its login when it starts.
@@ -151,16 +154,13 @@ public enum CodexSwapEvent: Equatable, Sendable {
 public enum CodexSwapCommand {
     /// "A newer version of ccswap is available (0.43.0)" → "0.43.0".
     public static func newerVersion(in output: String) -> String? {
-        guard let range = output.range(of: "newer version of ccswap is available (") else { return nil }
-        let rest = output[range.upperBound...]
-        guard let end = rest.firstIndex(of: ")") else { return nil }
-        let version = String(rest[..<end])
-        return AppVersion(version) != nil ? version : nil
+        SwitcherOutput.newerVersion(of: "ccswap", in: output)
     }
 
     /// A typed command as ccswap's arguments: "list --json" and "ccswap codex list --json" both
-    /// become `codex list --json`. Only `config`, `--version` and `--help` stay outside `codex`,
-    /// so a Claude command can't be run from here. nil when a quote is left open.
+    /// become `codex list --json`. Only `config` and `--version` stay outside `codex`, so a
+    /// Claude command can't be run from here, and `--help` shows the Codex commands' help.
+    /// nil when a quote is left open.
     public static func arguments(_ text: String) -> [String]? {
         guard var arguments = ClaudeSwapCommand.arguments(text) else { return nil }
         if arguments.first == "ccswap" { arguments.removeFirst() }
@@ -193,25 +193,22 @@ extension CodexAccounts {
     /// ccswap, the accounts Codex has used here, with their limits.
     public static func merge(book: AccountBook, ccswap: [CodexSwapAccount]?, now: Date) -> [ClaudeAccount] {
         guard let ccswap, !ccswap.isEmpty else { return list(book: book, switching: false, now: now) }
-        return ccswap.map { swap in
-            // ccswap's numbers are its own; the book knows the account by email (and workspace).
-            let matches = book.entries.filter { $0.value.identity.email.caseInsensitiveCompare(swap.email) == .orderedSame }
-            let known = (swap.isActive ? matches.first { $0.key == book.activeKey }?.value : nil) ?? matches.first?.value
-            var identity = known?.identity ?? ClaudeAccountIdentity(accountUUID: "", email: swap.email.lowercased())
-            if !swap.planType.isEmpty { identity.tier = swap.planType }
-            var account = ClaudeAccount(identity: identity, kind: .codex, isActive: swap.isActive, fiveHour: swap.fiveHour,
-                                        sevenDay: swap.weekly, limitsObservedAt: swap.usageReadAt ?? now, switcher: .ccswap,
-                                        needsLogin: swap.needsLogin)
-            account.ccswapNumber = swap.number
-            // Codex's sessions report the account in use as they work; ccswap is asked every few minutes.
-            if let known, swap.isActive, let observed = known.limitsObservedAt, observed > (swap.usageReadAt ?? .distantPast),
-               known.fiveHour != nil || known.sevenDay != nil {
-                account.fiveHour = known.fiveHour ?? account.fiveHour
-                account.sevenDay = known.sevenDay ?? account.sevenDay
-                account.limitsObservedAt = observed
-            }
-            return account.current(at: now)
-        }
-        .sorted { lhs, rhs in lhs.isActive != rhs.isActive ? lhs.isActive : (lhs.ccswapNumber ?? 0) < (rhs.ccswapNumber ?? 0) }
+        return AccountList.fromSwitcher(ccswap, book: book, now: now)
+    }
+}
+
+extension CodexSwapAccount: SwitcherRow {
+    /// ccswap's numbers are its own and it names no workspace: the book knows the account by email.
+    var organizationUUID: String? { nil }
+    var readingAt: Date? { usageReadAt }
+
+    func account(known: ClaudeAccountIdentity?, now: Date) -> ClaudeAccount {
+        var identity = known ?? ClaudeAccountIdentity(accountUUID: "", email: email.lowercased())
+        if !planType.isEmpty { identity.tier = planType }
+        var account = ClaudeAccount(identity: identity, kind: .codex, isActive: isActive, fiveHour: fiveHour,
+                                    sevenDay: weekly, limitsObservedAt: usageReadAt ?? now, switcher: .ccswap,
+                                    needsLogin: needsLogin)
+        account.ccswapNumber = number
+        return account
     }
 }
