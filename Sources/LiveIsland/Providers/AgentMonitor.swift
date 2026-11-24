@@ -185,7 +185,8 @@ private final class Worker: @unchecked Sendable {
                     project: ClaudeTranscript.projectName(cwd: tail.cwd, fallback: Self.claudeProjectFallback(path)),
                     title: tail.title, state: state, lastActivity: tail.lastTimestamp ?? session.modified,
                     workingSince: state == .working || state == .waiting ? tail.turnStartedAt : nil, cwd: tail.cwd,
-                    host: hosts.claude[URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent]))
+                    host: hosts.claude[URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent],
+                    request: ClaudeTranscript.request(of: tail, state: state)))
             case .codex:
                 guard let tail = session.codexTail else { continue }
                 let state = CodexRollout.state(of: tail, modified: session.modified, now: now)
@@ -194,7 +195,8 @@ private final class Worker: @unchecked Sendable {
                     project: ClaudeTranscript.projectName(cwd: session.codexCwd ?? tail.cwd, fallback: "Codex"),
                     state: state, lastActivity: tail.lastEventAt ?? session.modified,
                     workingSince: tail.working ? tail.turnStartedAt : nil, tokens: tail.tokens ?? 0,
-                    cwd: session.codexCwd ?? tail.cwd, host: (session.codexCwd ?? tail.cwd).flatMap { hosts.codex[$0] }))
+                    cwd: session.codexCwd ?? tail.cwd, host: (session.codexCwd ?? tail.cwd).flatMap { hosts.codex[$0] },
+                    request: CodexRollout.request(of: tail, state: state)))
             }
         }
         list.sort { lhs, rhs in
