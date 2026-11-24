@@ -67,7 +67,7 @@ enum ClaudeStatusLine {
             guard needsUpdate else { return url }
             try backUp(url)
             lines.replaceSubrange(start...end, with: block.components(separatedBy: "\n"))
-            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            try save(lines.joined(separator: "\n"), to: url)
             return url
         }
         guard !text.contains(ClaudeUsageLimits.fileName) else { return url }
@@ -77,13 +77,39 @@ enum ClaudeStatusLine {
         try backUp(url)
         lines.insert(contentsOf: ["", block], at: index + 1)
         text = lines.joined(separator: "\n")
-        try text.write(to: url, atomically: true, encoding: .utf8)
+        try save(text, to: url)
         return url
     }
 
+    /// Writes the script where it really is: a symlinked script (dotfiles kept in a repository)
+    /// stays a symlink, and the file keeps its permissions, so it can still run. An atomic write
+    /// would otherwise put a new 0644 file in the link's place.
+    private static func save(_ text: String, to url: URL) throws {
+        let target = url.resolvingSymlinksInPath()
+        let permissions = (try? FileManager.default.attributesOfItem(atPath: target.path))?[.posixPermissions] as? NSNumber
+        try text.write(to: target, atomically: true, encoding: .utf8)
+        if let permissions {
+            try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: target.path)
+        }
+    }
+
+    /// A copy of the script's contents next to the path the settings name, so a symlink's
+    /// backup is the file itself, not a second link to the file about to change.
     private static func backUp(_ url: URL) throws {
         let backup = url.appendingPathExtension("liveisland-backup")
         try? FileManager.default.removeItem(at: backup)
-        try FileManager.default.copyItem(at: url, to: backup)
+        try FileManager.default.copyItem(at: url.resolvingSymlinksInPath(), to: backup)
+    }
+
+    /// Whether the lines can work: they need `jq`, which macOS has only from macOS 15 on, and
+    /// without it they'd pass nothing on without a word. Looked for where Claude Code finds it.
+    static var hasJQ: Bool {
+        let folders = ClaudeCLI.shellPath.split(separator: ":").map(String.init) + ["/usr/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+        return folders.contains { FileManager.default.isExecutableFile(atPath: ($0 as NSString).appendingPathComponent("jq")) }
+    }
+
+    /// What to tell the person when jq is missing, or nil when it's there.
+    static var missingJQNote: String? {
+        hasJQ ? nil : "The lines use jq, which isn't installed, so they can't pass the limits on. Install it with brew install jq."
     }
 }

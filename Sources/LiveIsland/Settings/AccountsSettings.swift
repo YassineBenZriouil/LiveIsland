@@ -576,7 +576,12 @@ private struct AddAccountCard<Tool: SwapTool>: View {
                     .disabled(tool.newAccountName.trimmingCharacters(in: .whitespaces).isEmpty || tool.adding != nil)
             }
             if let adding = tool.adding {
-                HStack(spacing: 6) { ProgressView().controlSize(.small); Text(adding).font(.system(size: 11)).foregroundStyle(.secondary) }
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small); Text(adding).font(.system(size: 11)).foregroundStyle(.secondary)
+                    if let codex = tool as? CodexSwapController, codex.canCancelAdding {
+                        Button("Cancel") { codex.cancelAdding() }.buttonStyle(.link).font(.system(size: 11))
+                    }
+                }
             }
             Text(tool.info.signInHelp).font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
