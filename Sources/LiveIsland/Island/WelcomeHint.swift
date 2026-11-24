@@ -14,8 +14,9 @@ struct WelcomeHint: View {
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(LinearGradient(colors: [.pink, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text("LiveIsland is running").font(.system(size: 14, weight: .bold))
+                Text("LiveIsland is running").font(.system(size: 14, weight: .bold)).accessibilityAddTraits(.isHeader)
                 Text(pointingHint)
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.65))
                     .fixedSize(horizontal: false, vertical: true)

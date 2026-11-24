@@ -7,6 +7,7 @@ private let islandSpring = Animation.spring(response: 0.42, dampingFraction: 0.8
 /// full panel below it. Dragged away from the notch, it floats and opens toward the side with room.
 struct IslandView: View {
     @EnvironmentObject private var model: IslandModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let layout: IslandLayout
 
     var body: some View {
@@ -27,11 +28,11 @@ struct IslandView: View {
                             .transition(.opacity)
                     } else if model.isExpanded {
                         ExpandedIsland(layout: layout)
-                            .transition(.blurReplace.combined(with: .opacity))
+                            .transition(Motion.swap(reduced: reduceMotion))
                     } else if let primary {
                         CompactIsland(activity: primary, layout: layout)
                             .id(CompactIsland.identity(of: primary))
-                            .transition(.blurReplace.combined(with: .opacity))
+                            .transition(Motion.swap(reduced: reduceMotion))
                     }
                 }
                 .frame(width: size.width, height: size.height, alignment: .top)
@@ -51,8 +52,8 @@ struct IslandView: View {
         }
         .frame(width: IslandLayout.canvas.width, height: IslandLayout.canvas.height,
                alignment: layout.opensDown ? .top : .bottom)
-        .animation(islandSpring, value: model.isExpanded)
-        .animation(islandSpring, value: primary.map(CompactIsland.identity(of:)))
+        .animation(Motion.animation(islandSpring, reduced: reduceMotion), value: model.isExpanded)
+        .animation(Motion.animation(islandSpring, reduced: reduceMotion), value: primary.map(CompactIsland.identity(of:)))
         .environment(\.colorScheme, .dark)
         // While the screen is shared (or always, if asked), views marked `privacySensitive` blur.
         .redacted(reason: model.hidesDetails ? .privacy : [])
@@ -98,6 +99,7 @@ struct IslandShape: Shape {
 /// Two small wings beside the notch: an icon on the left, a detail on the right.
 struct CompactIsland: View {
     @EnvironmentObject private var model: IslandModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let activity: IslandActivity
     let layout: IslandLayout
 
@@ -110,7 +112,7 @@ struct CompactIsland: View {
                         leading
                         status.minimumScaleFactor(0.7)
                     }
-                    .transition(.blurReplace.combined(with: .opacity))
+                    .transition(Motion.swap(reduced: reduceMotion))
                 } else {
                     leading
                 }
@@ -122,7 +124,7 @@ struct CompactIsland: View {
                 if split {
                     Waveform(meter: model.levels, style: .compact,
                              color: model.artwork(for: model.compactPlayer)?.accent ?? .pink, playing: true)
-                        .transition(.blurReplace.combined(with: .opacity))
+                        .transition(Motion.swap(reduced: reduceMotion))
                 } else {
                     trailing
                 }
@@ -134,7 +136,19 @@ struct CompactIsland: View {
         .lineLimit(1)
         // "Microsoft Teams" or "Needs you" shrink a little rather than lose their end.
         .minimumScaleFactor(0.7)
-        .animation(.spring(response: 0.42, dampingFraction: 0.8), value: split)
+        .animation(Motion.animation(.spring(response: 0.42, dampingFraction: 0.8), reduced: reduceMotion), value: split)
+        // Icons, clocks and a waveform mean little one by one: VoiceOver gets one sentence for
+        // both wings, and the Join button as an action of it.
+        .accessibilityHidden(true)
+        .overlay { SpokenIsland(activity: activity, request: spokenRequest, meeting: meetingLink) }
+    }
+
+    /// What the agent behind the activity waits on, for the spoken label.
+    private var spokenRequest: AgentRequest? {
+        switch activity {
+        case .agentNeedsYou(let kind, let project), .agentDone(let kind, let project): return request(kind, project)
+        default: return nil
+        }
     }
 
     /// Where the camera would be. On a notch nothing can be drawn there; on a pill without one
@@ -171,7 +185,7 @@ struct CompactIsland: View {
         case .agentDone:
             Image(systemName: "checkmark").font(.system(size: 12, weight: .heavy)).foregroundStyle(.green)
         case .agentNeedsYou(let kind, let project):
-            Image(systemName: request(kind, project)?.symbol ?? "hand.raised.fill").foregroundStyle(.yellow).symbolEffect(.pulse)
+            Image(systemName: request(kind, project)?.symbol ?? "hand.raised.fill").foregroundStyle(.yellow).pulsing()
         default:
             trailing
         }
@@ -226,9 +240,9 @@ struct CompactIsland: View {
     @ViewBuilder private var leading: some View {
         switch activity {
         case .call:
-            Image(systemName: "phone.fill").foregroundStyle(.green).symbolEffect(.pulse)
+            Image(systemName: "phone.fill").foregroundStyle(.green).pulsing()
         case .timerFinished:
-            Image(systemName: "bell.fill").foregroundStyle(.orange).symbolEffect(.pulse)
+            Image(systemName: "bell.fill").foregroundStyle(.orange).pulsing()
         case .timer:
             TimerRing(size: 18)
         case .agentNeedsYou(let kind, _), .agentDone(let kind, _):
@@ -266,7 +280,7 @@ struct CompactIsland: View {
         case .headphonesConnected(let name, _):
             Image(systemName: HeadphoneSymbol.name(for: name)).foregroundStyle(.white)
         case .charging:
-            Image(systemName: "bolt.fill").foregroundStyle(.green).symbolEffect(.pulse)
+            Image(systemName: "bolt.fill").foregroundStyle(.green).pulsing()
         case .lowBattery(let device, _):
             if let device {
                 Image(systemName: HeadphoneSymbol.name(for: device)).foregroundStyle(.white)
@@ -386,6 +400,8 @@ struct AgentGlyph: View {
             }
         }
         .frame(width: size + 10, height: size + 10)
+        // Always beside the agent's name, or inside a label that says it.
+        .accessibilityHidden(true)
     }
 
     var color: Color {
@@ -411,6 +427,7 @@ struct Artwork: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .accessibilityHidden(true)
     }
 }
 
@@ -430,6 +447,9 @@ struct BatteryBadge: View {
             Text("\(percent)%").monospacedDigit()
         }
         .foregroundStyle(.white)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery")
+        .accessibilityValue("\(percent)%")
     }
 }
 
@@ -447,6 +467,9 @@ struct TimerRing: View {
                     .rotationEffect(.degrees(-90))
             }
             .frame(width: size, height: size)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Timer")
+            .accessibilityValue(model.timer.map { Spoken.duration($0.remaining(at: context.date)) + " left" } ?? "")
         }
     }
 }

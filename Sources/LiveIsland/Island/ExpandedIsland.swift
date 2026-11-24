@@ -7,6 +7,7 @@ private let tabSpring = Animation.spring(response: 0.36, dampingFraction: 0.82)
 /// The open island: tabs and status beside the notch, the chosen page below it.
 struct ExpandedIsland: View {
     @EnvironmentObject private var model: IslandModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var tabs
     let layout: IslandLayout
 
@@ -30,10 +31,10 @@ struct ExpandedIsland: View {
 
             ZStack(alignment: .top) {
                 switch model.tab {
-                case .media: MediaPage().transition(.blurReplace)
-                case .agents: AgentsPage().transition(.blurReplace)
-                case .activity: ActivityPage().transition(.blurReplace)
-                case .accounts: AccountsPage().transition(.blurReplace)
+                case .media: MediaPage().transition(page)
+                case .agents: AgentsPage().transition(page)
+                case .activity: ActivityPage().transition(page)
+                case .accounts: AccountsPage().transition(page)
                 }
             }
             .overlay(alignment: .top) {
@@ -46,8 +47,11 @@ struct ExpandedIsland: View {
         }
         .foregroundStyle(.white)
         .background { AmbientGlow() }
-        .animation(tabSpring, value: model.tab)
+        .animation(Motion.animation(tabSpring, reduced: reduceMotion), value: model.tab)
     }
+
+    /// Pages blur into each other, or only fade under Reduce Motion.
+    private var page: AnyTransition { reduceMotion ? .opacity : AnyTransition(.blurReplace) }
 }
 
 // MARK: - Header
@@ -63,12 +67,12 @@ private struct TabBar: View {
             ForEach(model.visibleTabs) { tab in
                 let selected = model.tab == tab
                 Button {
-                    withAnimation(tabSpring) { model.tab = tab }
+                    withAnimation(Motion.animation(tabSpring)) { model.tab = tab }
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: tab.symbol).font(.system(size: 11, weight: .semibold))
                         if selected && labels {
-                            Text(tab.rawValue).font(.system(size: 11, weight: .semibold, design: .rounded)).fixedSize()
+                            Text(tab.label).font(.system(size: 11, weight: .semibold, design: .rounded)).fixedSize()
                         }
                     }
                     .padding(.horizontal, selected ? 9 : 6.5)
@@ -86,11 +90,25 @@ private struct TabBar: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .help(tab.rawValue)
+                .help(tab.label)
+                // Icons only when room is short: VoiceOver still says every tab's name.
+                .accessibilityLabel(tab.label)
+                .accessibilityValue(badgeDescription(for: tab) ?? "")
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(3)
         .liquidGlass(in: Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Tabs")
+    }
+
+    /// The badge's dot in words.
+    private func badgeDescription(for tab: IslandTab) -> String? {
+        guard tab == .agents, model.tab != .agents else { return nil }
+        if model.sessions.contains(where: { $0.state == .waiting }) { return "An agent needs you" }
+        if model.sessions.contains(where: { $0.state == .working }) { return "An agent is working" }
+        return nil
     }
 
     /// A dot on Agents when one needs attention or is at work.
@@ -119,14 +137,21 @@ private struct StatusStrip: View {
 
     private func strip(percent: Bool) -> some View {
         HStack(spacing: 9) {
-            if model.system.cameraOn { Circle().fill(.green).frame(width: 6, height: 6).help("Camera in use") }
-            if !model.system.microphoneApps.isEmpty { Circle().fill(.orange).frame(width: 6, height: 6).help("Microphone in use") }
+            if model.system.cameraOn {
+                Circle().fill(.green).frame(width: 6, height: 6).help("Camera in use").accessibilityLabel("Camera in use")
+            }
+            if !model.system.microphoneApps.isEmpty {
+                Circle().fill(.orange).frame(width: 6, height: 6).help("Microphone in use").accessibilityLabel("Microphone in use")
+            }
             if let battery = model.system.battery {
                 HStack(spacing: 5) {
                     if percent { Text("\(battery.percent)%").monospacedDigit() }
                     BatteryGlyph(percent: battery.percent, charging: battery.isCharging || battery.onPower)
                 }
                 .help("\(battery.percent)%")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(battery.isCharging ? "Battery, charging" : battery.onPower ? "Battery, on power" : "Battery")
+                .accessibilityValue("\(battery.percent)%")
             }
             TimelineView(.everyMinute) { context in
                 Text(context.date, format: .dateTime.hour().minute())
@@ -137,12 +162,14 @@ private struct StatusStrip: View {
             }
             .buttonStyle(PressableStyle())
             .help("Move the island: it follows the pointer; press ⌘ to place it")
+            .accessibilityLabel("Move the island")
             Button { model.openSettings() } label: {
                 Image(systemName: "gearshape.fill").font(.system(size: 11, weight: .semibold))
                     .frame(width: 22, height: 22).contentShape(Circle())
             }
             .buttonStyle(PressableStyle())
             .help("Settings")
+            .accessibilityLabel("Settings")
         }
         .lineLimit(1)
         .fixedSize()
@@ -202,6 +229,7 @@ private struct AmbientGlow: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .allowsHitTesting(false)
+            .accessibilityHidden(true)
             .transition(.opacity)
         }
     }
@@ -353,6 +381,7 @@ private struct MediaPage: View {
 
 private struct CoverArt: View {
     @EnvironmentObject private var model: IslandModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let track: NowPlaying
     let accent: Color
 
@@ -362,8 +391,9 @@ private struct CoverArt: View {
                 Artwork(image: model.artwork(for: track)?.image, size: 116, corner: 22)
                     .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
                     .shadow(color: accent.opacity(0.45), radius: 18, y: 6)
-                    .scaleEffect(track.isPlaying ? 1 : 0.94)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.7), value: track.isPlaying)
+                    // Paused, the cover sinks back a little; under Reduce Motion it stays put.
+                    .scaleEffect(track.isPlaying || reduceMotion ? 1 : 0.94)
+                    .animation(Motion.animation(.spring(response: 0.45, dampingFraction: 0.7), reduced: reduceMotion), value: track.isPlaying)
                 if let icon = AppInfo.icon(track.bundleIdentifier) {
                     Image(nsImage: icon).resizable().frame(width: 28, height: 28)
                         .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
@@ -373,11 +403,13 @@ private struct CoverArt: View {
         }
         .buttonStyle(PressableStyle())
         .help("Open \(AppInfo.name(track.bundleIdentifier) ?? "the app")")
+        .accessibilityLabel("Open \(AppInfo.name(track.bundleIdentifier) ?? "the app")")
     }
 }
 
 private struct ScrubBar: View {
     @EnvironmentObject private var model: IslandModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let track: NowPlaying
     let now: Date
     let accent: Color
@@ -408,7 +440,7 @@ private struct ScrubBar: View {
                         model.seek(to: min(max(0, Double(drag.location.x / proxy.size.width)), 1) * duration)
                         model.scrubbing = nil
                     })
-                .animation(.spring(response: 0.25, dampingFraction: 0.8), value: model.scrubbing == nil)
+                .animation(Motion.animation(.spring(response: 0.25, dampingFraction: 0.8), reduced: reduceMotion), value: model.scrubbing == nil)
             }
             .frame(height: 10)
             HStack {
@@ -420,6 +452,19 @@ private struct ScrubBar: View {
             .monospacedDigit()
             .foregroundStyle(.white.opacity(0.5))
         }
+        // One slider for VoiceOver: where the track is, moved 15 seconds per swipe like the
+        // buttons beside it. A live stream has nowhere to go.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Position")
+        .accessibilityValue(duration > 0 ? "\(Spoken.duration(position)) of \(Spoken.duration(duration))" : "Live")
+        .accessibilityAdjustableAction { direction in
+            guard duration > 0 else { return }
+            switch direction {
+            case .increment: model.skip(by: 15)
+            case .decrement: model.skip(by: -15)
+            @unknown default: break
+            }
+        }
     }
 }
 
@@ -430,9 +475,9 @@ private struct Controls: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            control("gobackward.15", size: 15) { model.skip(by: -15) }.help("Back 15 seconds")
+            control("gobackward.15", size: 15, label: "Back 15 seconds") { model.skip(by: -15) }.help("Back 15 seconds")
             Spacer(minLength: 0)
-            control("backward.fill", size: 18) { model.previousTrack() }
+            control("backward.fill", size: 18, label: "Previous track") { model.previousTrack() }
             Spacer(minLength: 0)
             Button { model.togglePlayPause() } label: {
                 Image(systemName: track.isPlaying ? "pause.fill" : "play.fill")
@@ -443,20 +488,22 @@ private struct Controls: View {
             }
             .buttonStyle(PressableStyle())
             .liquidGlass(in: Circle(), tint: accent.opacity(0.35), interactive: true)
+            .accessibilityLabel(track.isPlaying ? "Pause" : "Play")
             Spacer(minLength: 0)
-            control("forward.fill", size: 18) { model.nextTrack() }
+            control("forward.fill", size: 18, label: "Next track") { model.nextTrack() }
             Spacer(minLength: 0)
-            control("goforward.15", size: 15) { model.skip(by: 15) }.help("Forward 15 seconds")
+            control("goforward.15", size: 15, label: "Forward 15 seconds") { model.skip(by: 15) }.help("Forward 15 seconds")
         }
         .padding(.horizontal, 6)
     }
 
-    private func control(_ symbol: String, size: CGFloat, action: @escaping () -> Void) -> some View {
+    private func control(_ symbol: String, size: CGFloat, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: size, weight: .semibold))
                 .frame(width: 34, height: 34).contentShape(Circle())
         }
         .buttonStyle(PressableStyle())
+        .accessibilityLabel(label)
     }
 }
 
@@ -470,12 +517,15 @@ private struct PlayerSwitcher: View {
             ForEach(model.players, id: \.bundleIdentifier) { player in
                 let selected = player.bundleIdentifier == model.nowPlaying?.bundleIdentifier
                 Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { model.selectedPlayerID = player.bundleIdentifier }
+                    withAnimation(Motion.animation(.spring(response: 0.3, dampingFraction: 0.85))) { model.selectedPlayerID = player.bundleIdentifier }
                 } label: {
                     chip(player.bundleIdentifier, named: selected, playing: player.isPlaying, selected: selected)
                 }
                 .buttonStyle(PressableStyle())
                 .help(player.title)
+                .accessibilityLabel(AppInfo.name(player.bundleIdentifier) ?? "Player")
+                .accessibilityValue(player.isPlaying ? "Playing" : "Paused")
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
             ForEach(model.idlePlayers, id: \.self) { bundle in
                 Button { model.launchPlayer(bundle) } label: {
@@ -483,6 +533,7 @@ private struct PlayerSwitcher: View {
                 }
                 .buttonStyle(PressableStyle())
                 .help("Play in \(AppInfo.name(bundle) ?? "the app")")
+                .accessibilityLabel("Play in \(AppInfo.name(bundle) ?? "the app")")
             }
         }
     }
@@ -520,6 +571,9 @@ private struct QueueStrip: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(queue.isEmpty ? "RECENTLY PLAYED" : "UP NEXT")
                     .font(.system(size: 9, weight: .bold)).tracking(0.8).foregroundStyle(.white.opacity(0.45))
+                    // In capitals, VoiceOver could spell it out.
+                    .accessibilityLabel(queue.isEmpty ? "Recently played" : "Up next")
+                    .accessibilityAddTraits(.isHeader)
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
                         if let bundle = current?.bundleIdentifier, !queue.isEmpty {
@@ -528,6 +582,7 @@ private struct QueueStrip: View {
                                     TrackChip(title: item.title, artist: item.artist, image: nil, number: index + 1, accent: accent)
                                 }
                                 .buttonStyle(PressableStyle())
+                                .accessibilityLabel(item.artist.isEmpty ? "Play \(item.title)" : "Play \(item.title) by \(item.artist)")
                             }
                         } else {
                             ForEach(history) { track in
@@ -537,6 +592,7 @@ private struct QueueStrip: View {
                                 }
                                 .buttonStyle(PressableStyle())
                                 .help("Play \(track.title) in \(AppInfo.name(track.bundleIdentifier) ?? "its app")")
+                                .accessibilityLabel("Play \(track.title) in \(AppInfo.name(track.bundleIdentifier) ?? "its app")")
                             }
                         }
                     }
@@ -598,8 +654,9 @@ private struct VolumeRow: View {
                 }
                 .buttonStyle(PressableStyle())
                 .help(output.muted ? "Unmute" : "Mute")
+                .accessibilityLabel(output.muted ? "Unmute" : "Mute")
                 if output.canSetVolume {
-                    CapsuleSlider(value: output.muted ? 0 : Double(output.volume), tint: .white) { model.volume.setVolume(Float($0)) }
+                    CapsuleSlider(value: output.muted ? 0 : Double(output.volume), tint: .white, label: "Volume") { model.volume.setVolume(Float($0)) }
                         .frame(width: 120)
                 }
                 OutputPicker(output: output)
@@ -636,6 +693,8 @@ private struct OutputPicker: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Choose where the sound plays")
+            .accessibilityLabel("Sound output")
+            .accessibilityValue(output.device)
         } else {
             label(chevron: false)
         }
@@ -667,10 +726,12 @@ private struct OutputPicker: View {
     }
 }
 
-/// A thin slider that thickens while dragged.
+/// A thin slider that thickens while dragged. VoiceOver reads it as a percentage and moves
+/// it 5% per swipe.
 struct CapsuleSlider: View {
     let value: Double
     var tint: Color = .white
+    var label = "Volume"
     let onChange: (Double) -> Void
 
     var body: some View {
@@ -687,6 +748,16 @@ struct CapsuleSlider: View {
             })
         }
         .frame(height: 16)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(Spoken.percent(value))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: onChange(Spoken.stepped(value, up: true))
+            case .decrement: onChange(Spoken.stepped(value, up: false))
+            @unknown default: break
+            }
+        }
     }
 }
 
@@ -701,6 +772,7 @@ private struct EmptyMedia: View {
             }
             .frame(width: 110, height: 110)
             .shadow(color: .pink.opacity(0.35), radius: 20, y: 6)
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Nothing playing").font(.system(size: 18, weight: .bold))
                 Text("Music, podcasts and videos from any app show up here, with controls.")
@@ -785,9 +857,9 @@ private struct SessionsHeader: View {
         let working = model.sessions.filter { $0.state == .working }.count
         let waiting = model.sessions.filter { $0.state == .waiting }.count
         HStack(spacing: 6) {
-            Text("Sessions").font(.system(size: 12, weight: .bold))
+            Text("Sessions").font(.system(size: 12, weight: .bold)).accessibilityAddTraits(.isHeader)
             if working > 0 { Chip(text: "\(working) working", color: AgentGlyph(kind: .claude).color) }
-            if waiting > 0 { Chip(text: "\(waiting) need\(waiting == 1 ? "s" : "") you", color: .yellow) }
+            if waiting > 0 { Chip(text: Spoken.plural(waiting, one: "1 needs you", other: "\(waiting) need you"), color: .yellow) }
             Spacer()
         }
     }
@@ -837,6 +909,18 @@ struct AgentAvatar: View {
                     .background(Circle().fill(.black)).offset(x: 3, y: 3)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(kind.displayName)
+        .accessibilityValue(Self.spokenState(state))
+    }
+
+    static func spokenState(_ state: AgentState) -> String {
+        switch state {
+        case .working: return "Working"
+        case .waiting: return "Needs you"
+        case .done: return "Done"
+        case .idle: return "Idle"
+        }
     }
 }
 
@@ -869,6 +953,7 @@ private struct AgentRow: View {
                     }
                     .buttonStyle(PressableStyle())
                     .help("Go to this session in \(AppInfo.name(host.bundleIdentifier) ?? "its app")")
+                    .accessibilityLabel("Go to this session in \(AppInfo.name(host.bundleIdentifier) ?? "its app")")
                 } else {
                     rowButton("folder", help: "Open the project folder") { model.openSession(session) }
                 }
@@ -881,6 +966,8 @@ private struct AgentRow: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.07), lineWidth: 0.5))
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture { model.jump(to: session) }
+        .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Go to session") { model.jump(to: session) }
     }
 
     private func rowButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -894,6 +981,7 @@ private struct AgentRow: View {
         .buttonStyle(PressableStyle())
         .foregroundStyle(.white.opacity(0.7))
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -926,8 +1014,9 @@ private struct StateChip: View {
             switch session.state {
             case .working:
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Chip(text: Format.span(context.date.timeIntervalSince(session.workingSince ?? session.lastActivity)),
-                         color: AgentGlyph(kind: session.kind).color)
+                    let since = context.date.timeIntervalSince(session.workingSince ?? session.lastActivity)
+                    Chip(text: Format.span(since), color: AgentGlyph(kind: session.kind).color)
+                        .accessibilityLabel("Working for \(Spoken.duration(since))")
                 }
             case .waiting:
                 Chip(text: "Needs you", color: .yellow)
@@ -938,9 +1027,11 @@ private struct StateChip: View {
                 Chip(text: "Done", color: .green)
             case .idle:
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    Text(Format.span(context.date.timeIntervalSince(session.lastActivity)) + " ago")
+                    let since = context.date.timeIntervalSince(session.lastActivity)
+                    Text(Format.span(since) + " ago")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.35))
+                        .accessibilityLabel("Last active \(Spoken.duration(since)) ago")
                 }
             }
         }
@@ -983,7 +1074,7 @@ private struct UsagePanel: View {
                 }
                 .scrollIndicators(.never)
                 UsageFlip(showsCost: pane.showsCost) {
-                    withAnimation(.easeInOut(duration: 0.2)) { pane.showsCost.toggle() }
+                    withAnimation(Motion.animation(.easeInOut(duration: 0.2))) { pane.showsCost.toggle() }
                 }
             }
         }
@@ -1004,7 +1095,7 @@ private struct ProviderTitle: View {
         HStack(spacing: 6) {
             AgentGlyph(kind: kind, size: 9)
                 .frame(width: 14, height: 14)
-            Text(kind.displayName).font(.system(size: 11, weight: .bold))
+            Text(kind.displayName).font(.system(size: 11, weight: .bold)).accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)
             if let runsOut {
                 Text("Runs out \(TaskTime.short(runsOut))").font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
@@ -1052,12 +1143,18 @@ private struct ClaudeUsage: View {
                         Text("Resets \(Format.until(limit.resetsAt))").font(.system(size: 10)).foregroundStyle(.white.opacity(0.5))
                     }
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(limit.windowLabel) limit reached")
+                .accessibilityValue("100% used, resets in \(Spoken.duration(limit.resetsAt.timeIntervalSinceNow))")
             } else if let usage {
                 HStack(spacing: 10) {
                     let fraction = usage.windowStart.map { min(1, Date().timeIntervalSince($0) / (5 * 3600)) } ?? 0
                     Ring(fraction: fraction, color: AgentGlyph(kind: .claude).color, size: 40) {
                         Text(Format.tokens(usage.windowTokens)).font(.system(size: 9, weight: .bold, design: .rounded)).minimumScaleFactor(0.6)
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Tokens this window")
+                    .accessibilityValue("\(Format.tokens(usage.windowTokens)), \(Spoken.percent(fraction)) of the 5 hours gone")
                     VStack(alignment: .leading, spacing: 2) {
                         Text(usage.windowStart == nil ? "No use in 5 hours" : "Tokens this window").font(.system(size: 11, weight: .semibold))
                         Text(usage.windowEnd.map { "Window ends \(Format.until($0))" } ?? "\(usage.todayRequests) replies today")
@@ -1166,6 +1263,8 @@ private struct UsageFlip: View {
         }
         .buttonStyle(PressableStyle())
         .help(showsCost ? "Show the usage limits" : "Show estimated cost and the last 30 days")
+        .accessibilityLabel(showsCost ? "Show the usage limits" : "Show estimated cost and history")
+        .accessibilityValue(showsCost ? "" : today ?? "")
     }
 }
 
@@ -1414,6 +1513,11 @@ private struct RingGauge: View {
                     .lineLimit(1)
             }
         }
+        // The ring, its number and the reset as one gauge: "Week limit, 42% used, resets in 3 days".
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(window.model == nil && window.windowMinutes != 300 ? window.label : window.shortLabel) limit")
+        .accessibilityValue("\(Int(used.rounded()))% used"
+                            + (window.resetsAt.map { ", resets in \(Spoken.duration($0.timeIntervalSinceNow))" } ?? ""))
     }
 
     private func color(_ used: Double) -> Color {
@@ -1422,6 +1526,7 @@ private struct RingGauge: View {
 }
 
 struct Ring<Label: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let fraction: Double
     let color: Color
     var size: CGFloat = 40
@@ -1441,7 +1546,7 @@ struct Ring<Label: View>: View {
             label
         }
         .frame(width: size, height: size)
-        .animation(.spring(response: 0.6, dampingFraction: 0.8), value: fraction)
+        .animation(Motion.animation(.spring(response: 0.6, dampingFraction: 0.8), reduced: reduceMotion), value: fraction)
     }
 }
 
@@ -1490,6 +1595,7 @@ private struct Tile<Accessory: View, Content: View>: View {
             HStack(spacing: 6) {
                 IconBadge(symbol: symbol, tint: tint)
                 Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 0)
                 accessory
             }
@@ -1511,17 +1617,19 @@ extension Tile where Accessory == EmptyView {
 
 private struct TimerTile: View {
     @EnvironmentObject private var model: IslandModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var dial = TimerDial.shared
 
     var body: some View {
         Tile(symbol: "timer", tint: .orange, title: "Timer") {
             if model.timer != nil {
                 HStack(spacing: 4) {
-                    small(model.timer?.isPaused == true ? "play.fill" : "pause.fill") { model.toggleTimerPause() }
-                    small("xmark") { model.cancelTimer() }
+                    small(model.timer?.isPaused == true ? "play.fill" : "pause.fill",
+                          label: model.timer?.isPaused == true ? "Resume timer" : "Pause timer") { model.toggleTimerPause() }
+                    small("xmark", label: "Cancel timer") { model.cancelTimer() }
                 }
             } else if dial.minutes != nil {
-                small("xmark") { dial.clear() }
+                small("xmark", label: "Back to the presets") { dial.clear() }
             }
         } content: {
             if let timer = model.timer {
@@ -1534,6 +1642,9 @@ private struct TimerTile: View {
                             .font(.system(size: 20, weight: .bold, design: .rounded)).monospacedDigit().foregroundStyle(.orange)
                             .minimumScaleFactor(0.7)
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(timer.isPaused ? "Timer, paused" : "Timer")
+                    .accessibilityValue("\(Spoken.duration(timer.remaining(at: context.date))) left")
                 }
             } else if model.timerFinished {
                 Button { model.dismissTimerAlert() } label: {
@@ -1547,7 +1658,7 @@ private struct TimerTile: View {
                         .font(.system(size: 20, weight: .bold, design: .rounded)).monospacedDigit().foregroundStyle(.orange)
                         .lineLimit(1).minimumScaleFactor(0.7)
                         .contentTransition(.numericText(value: minutes))
-                        .animation(.snappy(duration: 0.2), value: minutes)
+                        .animation(Motion.animation(.snappy(duration: 0.2), reduced: reduceMotion), value: minutes)
                     Button {
                         model.startTimer(minutes: minutes)
                         dial.clear()
@@ -1571,6 +1682,7 @@ private struct TimerTile: View {
                                 .contentShape(Capsule())
                         }
                         .buttonStyle(PressableStyle())
+                        .accessibilityLabel("Start a \(Spoken.count(Int(minutes), "minute", "minutes")) timer")
                     }
                 }
             }
@@ -1584,12 +1696,14 @@ private struct TimerTile: View {
         .onDisappear { dial.clear() }
     }
 
-    private func small(_ symbol: String, action: @escaping () -> Void) -> some View {
+    private func small(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 9, weight: .bold))
                 .frame(width: 20, height: 20).background(Circle().fill(.white.opacity(0.1))).contentShape(Circle())
         }
         .buttonStyle(PressableStyle())
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -1731,6 +1845,7 @@ private struct JoinButton: View {
             }
             .buttonStyle(PressableStyle())
             .help("Join on \(link.service.name)")
+            .accessibilityLabel("Join on \(link.service.name)")
         }
     }
 }
@@ -1745,6 +1860,7 @@ private struct BatteryTile: View {
                 HStack(alignment: .center, spacing: 10) {
                     Text("\(battery.percent)%").font(.system(size: 22, weight: .bold, design: .rounded)).monospacedDigit()
                     BatteryGlyph(percent: battery.percent, charging: battery.isCharging || battery.onPower, width: 34)
+                        .accessibilityHidden(true)
                 }
                 Text(detail(battery)).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
             } else {
@@ -1797,6 +1913,18 @@ private struct HeadphonesTile: View {
                 }
             if !label.isEmpty { Text(label).font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.45)) }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.spokenSide(label))
+        .accessibilityValue("\(percent)%")
+    }
+
+    private static func spokenSide(_ label: String) -> String {
+        switch label {
+        case "L": return "Left"
+        case "R": return "Right"
+        case "": return "Battery"
+        default: return label
+        }
     }
 }
 
@@ -1848,6 +1976,7 @@ private struct MicMuteButton: View {
             }
             .buttonStyle(PressableStyle())
             .help(state.muted ? "Unmute \(state.device)" : "Mute \(state.device)")
+            .accessibilityLabel(state.muted ? "Unmute \(state.device)" : "Mute \(state.device)")
         }
     }
 }
@@ -1916,12 +2045,23 @@ enum AppInfo {
     }
 }
 
-/// Plain buttons that dip slightly when pressed.
+/// Plain buttons that dip slightly when pressed; under Reduce Motion they only dim.
 struct PressableStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.88 : 1)
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
+        Pressed(label: configuration.label, isPressed: configuration.isPressed)
+    }
+
+    /// A view of its own, where the environment's Reduce Motion can be read.
+    private struct Pressed<Label: View>: View {
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        let label: Label
+        let isPressed: Bool
+
+        var body: some View {
+            label
+                .scaleEffect(isPressed && !reduceMotion ? 0.88 : 1)
+                .opacity(isPressed ? 0.7 : 1)
+                .animation(Motion.animation(.spring(response: 0.2, dampingFraction: 0.7), reduced: reduceMotion), value: isPressed)
+        }
     }
 }

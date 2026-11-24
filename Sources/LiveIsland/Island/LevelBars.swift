@@ -5,6 +5,7 @@ import SwiftUI
 /// The waveform beside a track: bars that move with the real sound, or the animated symbol
 /// when LiveIsland can't hear it (turned off, not allowed, or before macOS 14.2).
 struct Waveform: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var meter: AudioLevelMeter
     let style: LevelBarsView.Style
     let color: Color
@@ -22,11 +23,13 @@ struct Waveform: View {
                 Image(systemName: "waveform")
                     .font(.system(size: style.symbolSize, weight: .semibold))
                     .foregroundStyle(color)
-                    .symbolEffect(.variableColor.iterative.reversing, isActive: playing)
+                    .symbolEffect(.variableColor.iterative.reversing, isActive: playing && !reduceMotion)
             }
         }
         .frame(width: style.size.width, height: style.size.height)
         .animation(.easeInOut(duration: 0.25), value: meter.isHearing)
+        // It only shows that sound plays, which the track's own label already says.
+        .accessibilityHidden(true)
     }
 }
 
