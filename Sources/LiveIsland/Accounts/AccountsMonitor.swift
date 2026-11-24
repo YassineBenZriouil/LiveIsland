@@ -7,8 +7,8 @@ import LiveIslandCore
 @MainActor
 final class AccountsMonitor {
     struct Snapshot: Equatable {
-        var accounts: [ClaudeAccount] = []
-        var codexAccounts: [ClaudeAccount] = []
+        var accounts: [Account] = []
+        var codexAccounts: [Account] = []
         var claudeSwapInstalled = false
         var ccswapInstalled = false
         /// The account being switched to right now.
@@ -17,8 +17,8 @@ final class AccountsMonitor {
         var message: String?
         var messageIsError = false
 
-        var active: ClaudeAccount? { accounts.first(where: \.isActive) }
-        var activeCodex: ClaudeAccount? { codexAccounts.first(where: \.isActive) }
+        var active: Account? { accounts.first(where: \.isActive) }
+        var activeCodex: Account? { codexAccounts.first(where: \.isActive) }
     }
 
     var onUpdate: ((Snapshot) -> Void)?
@@ -35,7 +35,7 @@ final class AccountsMonitor {
     private let queue = DispatchQueue(label: "com.aissam.liveisland.accounts", qos: .utility)
     private let worker = Worker()
     private var timer: Timer?
-    private var latestLimits: ClaudeUsageLimits?
+    private var latestLimits: UsageLimits?
     private var latestNotice: ClaudeLimitNotice?
     private var latestCodexLimits: CodexLimits?
     /// Asked for more often while the Accounts page is open.
@@ -54,7 +54,7 @@ final class AccountsMonitor {
 
     /// From the agent monitor: the status line's latest limits, and a limit Claude is
     /// refusing requests for right now.
-    func observe(limits: ClaudeUsageLimits?, notice: ClaudeLimitNotice?, codexLimits: CodexLimits?) {
+    func observe(limits: UsageLimits?, notice: ClaudeLimitNotice?, codexLimits: CodexLimits?) {
         latestLimits = limits
         latestNotice = notice
         latestCodexLimits = codexLimits
@@ -89,7 +89,7 @@ final class AccountsMonitor {
         }
     }
 
-    /// The account a switch is on its way to (its `ClaudeAccount.id`), or nil once it's done:
+    /// The account a switch is on its way to (its `Account.id`), or nil once it's done:
     /// the island and the menu bar show a spinner and hold other switches meanwhile.
     func setSwitching(_ id: String?) {
         var next = snapshot
@@ -98,7 +98,7 @@ final class AccountsMonitor {
     }
 
     /// Forgets an account LiveIsland saw: its row. The active account stays listed.
-    func forget(_ account: ClaudeAccount) {
+    func forget(_ account: Account) {
         queue.async { [weak self, worker] in
             worker.forget(account)
             DispatchQueue.main.async { self?.refresh() }
@@ -117,7 +117,7 @@ private final class Worker: @unchecked Sendable {
     struct Input {
         var claudeSwap: [ClaudeSwapAccount]?
         var ccswap: [CodexSwapAccount]?
-        var limits: ClaudeUsageLimits?
+        var limits: UsageLimits?
         var notice: ClaudeLimitNotice?
         var codexLimits: CodexLimits?
     }
@@ -160,7 +160,7 @@ private final class Worker: @unchecked Sendable {
         return created
     }
 
-    func tick(_ input: Input, now: Date) -> (claude: [ClaudeAccount], codex: [ClaudeAccount]) {
+    func tick(_ input: Input, now: Date) -> (claude: [Account], codex: [Account]) {
         let before = book, codexBefore = codexBook
         followCodex(now: now)
         if let limits = input.codexLimits, limits.observedAt != recordedCodexLimits,
@@ -184,7 +184,7 @@ private final class Worker: @unchecked Sendable {
                 CodexAccounts.merge(book: codexBook, ccswap: input.ccswap, now: now))
     }
 
-    func forget(_ account: ClaudeAccount) {
+    func forget(_ account: Account) {
         let key = account.identity.key
         if account.kind == .codex {
             codexBook.remove(key)

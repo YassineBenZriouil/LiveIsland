@@ -7,7 +7,7 @@ enum ClaudeStatusLine {
     static let block = """
     # LiveIsland: share Claude Code's usage limits with the island (delete these lines to stop).
     if limits=$(printf '%s' "$input" | jq -c 'select(.rate_limits != null) | {observed_at: now, transcript_path, rate_limits}' 2>/dev/null) && [ -n "$limits" ]; then
-      printf '%s\\n' "$limits" > "$HOME/.claude/\(ClaudeUsageLimits.fileName).tmp" && mv -f "$HOME/.claude/\(ClaudeUsageLimits.fileName).tmp" "$HOME/.claude/\(ClaudeUsageLimits.fileName)"
+      printf '%s\\n' "$limits" > "$HOME/.claude/\(UsageLimits.fileName).tmp" && mv -f "$HOME/.claude/\(UsageLimits.fileName).tmp" "$HOME/.claude/\(UsageLimits.fileName)"
     fi
     """
 
@@ -45,14 +45,14 @@ enum ClaudeStatusLine {
 
     static var isInstalled: Bool {
         guard let url = try? script(), let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
-        return text.contains(ClaudeUsageLimits.fileName)
+        return text.contains(UsageLimits.fileName)
     }
 
     /// Lines added by an earlier version, which didn't say which session reported the limits:
     /// without that, accounts can't be told apart after a switch.
     static var needsUpdate: Bool {
         guard let url = try? script(), let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
-        return text.contains(ClaudeUsageLimits.fileName) && !text.contains("transcript_path, rate_limits")
+        return text.contains(UsageLimits.fileName) && !text.contains("transcript_path, rate_limits")
     }
 
     /// Adds the lines right after the script reads its input, keeping a copy of the original
@@ -70,7 +70,7 @@ enum ClaudeStatusLine {
             try save(lines.joined(separator: "\n"), to: url)
             return url
         }
-        guard !text.contains(ClaudeUsageLimits.fileName) else { return url }
+        guard !text.contains(UsageLimits.fileName) else { return url }
         guard let index = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("input=$(cat") }) else {
             throw Failure.noInputLine(url.path)
         }

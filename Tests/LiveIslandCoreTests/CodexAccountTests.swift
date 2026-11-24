@@ -49,11 +49,11 @@ struct CodexAccountTests {
         #expect(CodexPlan.label(planType: "plus") == "Plus")
         #expect(CodexPlan.label(planType: "team") == "Team")
         #expect(CodexPlan.label(planType: "edu") == "Edu")
-        #expect(ClaudeAccountIdentity(accountUUID: "u", email: "e", tier: "prolite").plan == "Pro Lite")
-        #expect(ClaudeAccountIdentity(accountUUID: "u", email: "e", tier: "pro").plan == "Pro")
+        #expect(AccountIdentity(accountUUID: "u", email: "e", tier: "prolite").plan == "Pro Lite")
+        #expect(AccountIdentity(accountUUID: "u", email: "e", tier: "pro").plan == "Pro")
         #expect(CodexPlan.label(planType: "") == nil)
-        #expect(ClaudeAccountIdentity(accountUUID: "u", email: "e", tier: "plus").plan == "Plus")
-        #expect(ClaudeAccountIdentity(accountUUID: "u", email: "e", tier: "default_claude_max_20x").plan == "Max 20x")
+        #expect(AccountIdentity(accountUUID: "u", email: "e", tier: "plus").plan == "Plus")
+        #expect(AccountIdentity(accountUUID: "u", email: "e", tier: "default_claude_max_20x").plan == "Max 20x")
     }
 
     @Test func codexLimitsFitTheAccountBook() {
@@ -78,6 +78,6 @@ struct CodexAccountTests {
         #expect(list[1].switcher == .liveIsland && list[0].switcher == nil, "only saved logins can be switched to")
         #expect(CodexAccounts.list(book: book, switching: false, now: now).allSatisfy { $0.switcher == nil })
         // The same email in Claude Code and Codex are two different rows.
-        #expect(list[1].id != ClaudeAccount(identity: a).id)
+        #expect(list[1].id != Account(identity: a).id)
     }
 }

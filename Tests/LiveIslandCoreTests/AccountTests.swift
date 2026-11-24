@@ -42,7 +42,7 @@ struct AccountTests {
     let now = Date(timeIntervalSince1970: 1_792_850_000)
 
     @Test func readsWhoTheLoginBelongsTo() throws {
-        let identity = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let identity = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
         #expect(identity.email == "a@example.com")
         #expect(identity.accountUUID == "acct-a")
         #expect(identity.displayName == "Aïcha")
@@ -112,14 +112,14 @@ struct AccountTests {
     }
 
     @Test func theBookFollowsTheActiveAccount() throws {
-        let a = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
-        let b = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
+        let a = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let b = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
         var book = AccountBook()
         book.setActive(a, at: now)
         #expect(book.activeSince == nil, "the first account seen wasn't a switch")
-        let limits = ClaudeUsageLimits(fiveHour: RateLimitWindow(usedPercent: 100, windowMinutes: 300, resetsAt: now.addingTimeInterval(3600)),
-                                       sevenDay: RateLimitWindow(usedPercent: 40, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(500_000)),
-                                       observedAt: now)
+        let limits = UsageLimits(fiveHour: RateLimitWindow(usedPercent: 100, windowMinutes: 300, resetsAt: now.addingTimeInterval(3600)),
+                                 sevenDay: RateLimitWindow(usedPercent: 40, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(500_000)),
+                                 observedAt: now)
         let recorded = book.record(limits, sessionStartedAt: nil)
         #expect(recorded)
         #expect(book.entries[a.key]?.fiveHour?.usedPercent == 100)
@@ -127,15 +127,15 @@ struct AccountTests {
         book.setActive(b, at: now.addingTimeInterval(60))
         #expect(book.activeSince == now.addingTimeInterval(60))
         // A session still on A's login reports A's numbers after the switch: they go to A, not B.
-        let stale = ClaudeUsageLimits(fiveHour: limits.fiveHour, sevenDay: limits.sevenDay, observedAt: now.addingTimeInterval(70))
+        let stale = UsageLimits(fiveHour: limits.fiveHour, sevenDay: limits.sevenDay, observedAt: now.addingTimeInterval(70))
         let routed = book.record(stale, sessionStartedAt: now.addingTimeInterval(-600))
         #expect(routed)
         #expect(book.entries[b.key]?.fiveHour == nil, "A's numbers mustn't land on B")
         #expect(book.entries[a.key]?.limitsObservedAt == now.addingTimeInterval(70))
         // New numbers from a session that was running before the switch: could be anyone's.
-        let fresh = ClaudeUsageLimits(fiveHour: RateLimitWindow(usedPercent: 3, windowMinutes: 300, resetsAt: now.addingTimeInterval(17_000)),
-                                      sevenDay: RateLimitWindow(usedPercent: 20, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(400_000)),
-                                      observedAt: now.addingTimeInterval(80))
+        let fresh = UsageLimits(fiveHour: RateLimitWindow(usedPercent: 3, windowMinutes: 300, resetsAt: now.addingTimeInterval(17_000)),
+                                sevenDay: RateLimitWindow(usedPercent: 20, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(400_000)),
+                                observedAt: now.addingTimeInterval(80))
         let fromOldSession = book.record(fresh, sessionStartedAt: now.addingTimeInterval(-600))
         #expect(!fromOldSession)
         // The same numbers from a session started after the switch: B's.
@@ -152,8 +152,8 @@ struct AccountTests {
     }
 
     @Test func anExhaustedAccountShowsItsLimitFromTheRefusal() throws {
-        let a = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
-        let c = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "c@example.com", uuid: "acct-c", org: "org-c").utf8)))
+        let a = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let c = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "c@example.com", uuid: "acct-c", org: "org-c").utf8)))
         var book = AccountBook()
         book.setActive(a, at: now)
         book.setActive(c, at: now.addingTimeInterval(10))
@@ -173,9 +173,9 @@ struct AccountTests {
     /// What happened in use: C (out of room, never measured) → A. A session started while C
     /// was in use is still on C's login and gets refused after the switch.
     @Test func aRefusalInAnOlderSessionNeverLandsOnTheNewAccount() throws {
-        let a = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
-        let b = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
-        let c = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "c@example.com", uuid: "acct-c", org: "org-c").utf8)))
+        let a = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let b = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
+        let c = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "c@example.com", uuid: "acct-c", org: "org-c").utf8)))
         var book = AccountBook()
         book.setActive(b, at: now)
         book.setActive(c, at: now.addingTimeInterval(100))
@@ -187,12 +187,12 @@ struct AccountTests {
     }
 
     @Test func aRefusalMatchingAnotherAccountsResetIsThatAccounts() throws {
-        let a = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
-        let b = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
+        let a = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let b = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
         var book = AccountBook()
         book.setActive(a, at: now)
         let reset = now.addingTimeInterval(3600)
-        book.record(ClaudeUsageLimits(fiveHour: RateLimitWindow(usedPercent: 98, windowMinutes: 300, resetsAt: reset), sevenDay: nil, observedAt: now),
+        book.record(UsageLimits(fiveHour: RateLimitWindow(usedPercent: 98, windowMinutes: 300, resetsAt: reset), sevenDay: nil, observedAt: now),
                     sessionStartedAt: nil)
         // Out of room on A, the user moves to B; a session still on A gets refused.
         book.setActive(b, at: now.addingTimeInterval(60))
@@ -203,8 +203,8 @@ struct AccountTests {
     }
 
     @Test func readingsFromBeforeTheSessionRuleAreDropped() throws {
-        let a = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
-        let b = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
+        let a = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let b = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
         var book = AccountBook()
         book.setActive(a, at: now)
         book.setActive(b, at: now.addingTimeInterval(10))
@@ -220,8 +220,8 @@ struct AccountTests {
     }
 
     @Test func cleansUpNumbersFiledUnderTwoAccounts() throws {
-        let a = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
-        let b = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
+        let a = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let b = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount(email: "b@example.com", uuid: "acct-b", org: "org-b").utf8)))
         var book = AccountBook()
         book.setActive(b, at: now)
         book.setActive(a, at: now.addingTimeInterval(10))
@@ -238,12 +238,12 @@ struct AccountTests {
     }
 
     @Test func picksTheAccountWithTheMostRoom() {
-        func account(_ email: String, active: Bool = false, five: Double?, week: Double?, switcher: ClaudeAccount.Switcher? = .liveIsland,
-                     needsLogin: Bool = false) -> ClaudeAccount {
-            ClaudeAccount(identity: ClaudeAccountIdentity(accountUUID: email, email: email), isActive: active,
-                          fiveHour: five.map { RateLimitWindow(usedPercent: $0, windowMinutes: 300, resetsAt: now.addingTimeInterval(600)) },
-                          sevenDay: week.map { RateLimitWindow(usedPercent: $0, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(86_400)) },
-                          limitsObservedAt: now, switcher: switcher, needsLogin: needsLogin)
+        func account(_ email: String, active: Bool = false, five: Double?, week: Double?, switcher: Account.Switcher? = .liveIsland,
+                     needsLogin: Bool = false) -> Account {
+            Account(identity: AccountIdentity(accountUUID: email, email: email), isActive: active,
+                    fiveHour: five.map { RateLimitWindow(usedPercent: $0, windowMinutes: 300, resetsAt: now.addingTimeInterval(600)) },
+                    sevenDay: week.map { RateLimitWindow(usedPercent: $0, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(86_400)) },
+                    limitsObservedAt: now, switcher: switcher, needsLogin: needsLogin)
         }
         let accounts = [
             account("active", active: true, five: 100, week: 50),
@@ -255,8 +255,8 @@ struct AccountTests {
             account("unswitchable", five: 0, week: 0, switcher: nil),
             account("unknown", five: nil, week: nil),
         ]
-        #expect(ClaudeAccount.best(accounts, at: now)?.identity.email == "roomy")
-        #expect(ClaudeAccount.best([accounts[0], accounts[4]], at: now) == nil, "99% of the week is no room")
+        #expect(Account.best(accounts, at: now)?.identity.email == "roomy")
+        #expect(Account.best([accounts[0], accounts[4]], at: now) == nil, "99% of the week is no room")
         #expect(accounts[0].isAtLimit)
         #expect(accounts[0].exhaustedWindow?.windowMinutes == 300)
         // A window that has reset counts from zero.
@@ -296,13 +296,13 @@ struct AccountTests {
     }
 
     @Test func showsExactlyClaudeSwapsAccounts() throws {
-        let a = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let a = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
         var book = AccountBook()
         book.setActive(a, at: now)
         book.entries[a.key]?.fiveHour = RateLimitWindow(usedPercent: 50, windowMinutes: 300, resetsAt: now.addingTimeInterval(600))
         book.entries[a.key]?.limitsObservedAt = now
         // An account Claude Code used here once, that claude-swap doesn't manage.
-        book.setActive(ClaudeAccountIdentity(accountUUID: "x", email: "old@example.com"), at: now.addingTimeInterval(-9000))
+        book.setActive(AccountIdentity(accountUUID: "x", email: "old@example.com"), at: now.addingTimeInterval(-9000))
         book.setActive(a, at: now)
         var spare = ClaudeSwapAccount(number: 3, email: "spare@example.com", organizationName: nil, organizationUUID: nil, isActive: false,
                                       usageStatus: "relogin_required", fiveHour: nil, sevenDay: nil, usageFetchedAt: now, isDisabled: true)
@@ -332,7 +332,7 @@ struct AccountTests {
     }
 
     @Test func theBookSurvivesARestart() throws {
-        let a = try #require(ClaudeAccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
+        let a = try #require(AccountIdentity.parse(Data(AccountFixture.oauthAccount().utf8)))
         var book = AccountBook()
         book.setActive(a, at: now)
         book.entries[a.key]?.sevenDay = RateLimitWindow(usedPercent: 47, windowMinutes: 10_080, resetsAt: now)

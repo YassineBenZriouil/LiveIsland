@@ -15,7 +15,7 @@ final class AgentMonitor {
         var claudeLimit: ClaudeLimitNotice?
         var codexLimits: CodexLimits?
         /// Claude Code's own 5-hour and weekly percentages, when the status line shares them.
-        var claudeLimits: ClaudeUsageLimits?
+        var claudeLimits: UsageLimits?
         /// Claude Code use per day for the last 30 days, oldest first and ending today, per
         /// model and project, with estimated cost.
         var usageHistory: [UsageDay] = []
@@ -364,17 +364,17 @@ private final class Worker: @unchecked Sendable {
         }
     }
 
-    private var claudeLimitsFile: (modified: Date, limits: ClaudeUsageLimits?)?
+    private var claudeLimitsFile: (modified: Date, limits: UsageLimits?)?
 
     /// Re-reads the status line's file only when it changed.
-    private func readClaudeLimits() -> ClaudeUsageLimits? {
-        let url = AgentMonitor.claudeRoot.deletingLastPathComponent().appendingPathComponent(ClaudeUsageLimits.fileName)
+    private func readClaudeLimits() -> UsageLimits? {
+        let url = AgentMonitor.claudeRoot.deletingLastPathComponent().appendingPathComponent(UsageLimits.fileName)
         guard let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else {
             claudeLimitsFile = nil
             return nil
         }
         if let cached = claudeLimitsFile, cached.modified == modified { return cached.limits }
-        let limits = (try? Data(contentsOf: url)).flatMap { ClaudeUsageLimits.parse($0, modified: modified) }
+        let limits = (try? Data(contentsOf: url)).flatMap { UsageLimits.parse($0, modified: modified) }
         claudeLimitsFile = (modified, limits)
         return limits
     }

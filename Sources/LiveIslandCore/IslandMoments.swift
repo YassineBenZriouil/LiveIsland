@@ -5,7 +5,7 @@ public enum LimitWait {
     /// When every account-wide limit it reached has reset; nil while it has room, or when a
     /// limit it reached doesn't say when it resets. A model's own week stops only that model, so
     /// it doesn't count.
-    public static func backAt(_ account: ClaudeAccount, at now: Date) -> Date? {
+    public static func backAt(_ account: Account, at now: Date) -> Date? {
         let reached = [account.fiveHour, account.sevenDay].compactMap { $0?.current(at: now) }.filter { $0.usedPercent >= 100 }
         guard !reached.isEmpty else { return nil }
         let resets = reached.compactMap(\.resetsAt)
@@ -15,7 +15,7 @@ public enum LimitWait {
 
     /// With no account to switch to: the one that comes back first, among the one in use and
     /// those that could be switched to, and when.
-    public static func firstBack(_ accounts: [ClaudeAccount], at now: Date) -> (account: ClaudeAccount, at: Date)? {
+    public static func firstBack(_ accounts: [Account], at now: Date) -> (account: Account, at: Date)? {
         accounts
             .filter { $0.isActive || ($0.switcher != nil && !$0.needsLogin) }
             .compactMap { account in backAt(account, at: now).map { (account, $0) } }
@@ -38,7 +38,7 @@ public struct LimitReturn: Sendable {
     public init() {}
 
     /// True once, on the first reading after the account's limit reset.
-    public mutating func observe(_ account: ClaudeAccount?, at now: Date) -> Bool {
+    public mutating func observe(_ account: Account?, at now: Date) -> Bool {
         guard let account else {
             waiting = nil
             return false
@@ -85,7 +85,7 @@ public enum LimitForecast {
     /// - Parameters:
     ///   - projected: claude-swap's `projectedExhaustionAt` for the week.
     ///   - willLastToReset: claude-swap's `willLastToReset` for the week.
-    public static func runsOut(_ account: ClaudeAccount, projected: Date? = nil, willLastToReset: Bool? = nil,
+    public static func runsOut(_ account: Account, projected: Date? = nil, willLastToReset: Bool? = nil,
                                at now: Date) -> Date? {
         let current = account.current(at: now)
         guard !current.isAtLimit else { return nil }

@@ -60,6 +60,15 @@ struct LinkAndFormatTests {
         #expect(Format.tokens(999_950_000) == "1B")
         #expect(Format.tokens(1_000_000_000_000) == "1000B", "B is the last unit")
         #expect(Format.tokens(0) == "0")
+        #expect(Format.tokens(-5) == "-5", "never a unit below a thousand")
+        #expect(Format.tokens(9_949) == "9.9K")
+        #expect(Format.tokens(9_950) == "10K", "one decimal rounds up to the next whole")
+        #expect(Format.tokens(99_949) == "99.9K")
+        #expect(Format.tokens(99_950) == "100K", "from 100 on, whole numbers")
+        #expect(Format.tokens(100_499) == "100K")
+        #expect(Format.tokens(999_949) == "1M", "999.9K rounds to 1000K")
+        #expect(Format.tokens(999_499_999) == "999M")
+        #expect(Format.tokens(999_500_000) == "1B")
         #expect(!Format.tokens(Int.max).isEmpty)
     }
 

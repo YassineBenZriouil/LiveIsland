@@ -10,7 +10,7 @@ enum CodexLogins {
     }
 
     /// The account Codex is logged in to.
-    static func active() -> (identity: ClaudeAccountIdentity, auth: Data)? {
+    static func active() -> (identity: AccountIdentity, auth: Data)? {
         guard let auth = try? Data(contentsOf: authURL), let identity = CodexLogin.identity(in: auth) else { return nil }
         return (identity, auth)
     }

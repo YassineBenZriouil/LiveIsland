@@ -506,7 +506,7 @@ private struct ProviderSwitch: View {
 /// One account as a card: who, its limits, and what can be done with it.
 private struct AccountCard<Menu: View>: View {
     let number: Int
-    let identity: ClaudeAccountIdentity
+    let identity: AccountIdentity
     let subtitle: String?
     let tags: [(String, Color)]
     /// The limits it reports: 5 hours only when it has that limit, the week, models' weeks.
@@ -744,7 +744,7 @@ private struct ClaudeCards: View {
             if accounts.isEmpty { EmptyAccounts(text: "claude-swap has no accounts yet. Add the one Claude Code uses now, then the others.") }
             ForEach(accounts, id: \.number) { account in
                 AccountCard(number: account.number,
-                            identity: ClaudeAccountIdentity(accountUUID: "", email: account.email, name: account.alias),
+                            identity: AccountIdentity(accountUUID: "", email: account.email, name: account.alias),
                             subtitle: account.alias != nil ? account.email : account.organizationName,
                             tags: tags(account), windows: account.windows, note: note(account),
                             isActive: account.isActive, isBest: model.bestAccount?.claudeSwapNumber == account.number,
@@ -811,7 +811,7 @@ private struct CodexCards: View {
             ForEach(accounts, id: \.number) { account in
                 let known = model.codexAccounts.first { $0.ccswapNumber == account.number }
                 AccountCard(number: account.number,
-                            identity: known?.identity ?? ClaudeAccountIdentity(accountUUID: "", email: account.email),
+                            identity: known?.identity ?? AccountIdentity(accountUUID: "", email: account.email),
                             subtitle: known?.identity.name != nil ? account.email : nil,
                             tags: tags(account),
                             windows: [known?.fiveHour ?? account.fiveHour, known?.sevenDay ?? account.weekly].compactMap { $0 },

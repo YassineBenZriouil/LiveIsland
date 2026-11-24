@@ -261,12 +261,12 @@ private struct AccountStrip: View {
         .liquidGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func usage(_ account: ClaudeAccount) -> String {
+    private func usage(_ account: Account) -> String {
         account.used.map { "\(Int($0.rounded()))% used" } ?? "not seen yet"
     }
 
     /// Only the limits the account reports: no "5 hours" for a plan without that limit.
-    private func limits(_ account: ClaudeAccount) -> String {
+    private func limits(_ account: Account) -> String {
         let windows = account.windows
         guard !windows.isEmpty else { return "Limits not seen yet" }
         return windows.map { "\($0.shortLabel) \(Int($0.usedPercent.rounded()))%" }.joined(separator: " · ")

@@ -9,8 +9,8 @@ private enum Matching {
         #"{"accountUuid":"\#(uuid)","emailAddress":"\#(email)","organizationUuid":"\#(org)","displayName":"","organizationRateLimitTier":"\#(tier)","organizationName":"\#(email)'s Organization"}"#
     }
 
-    static func identity(email: String, uuid: String, org: String, tier: String = "default_claude_max_20x") -> ClaudeAccountIdentity {
-        ClaudeAccountIdentity.parse(Data(oauth(email: email, uuid: uuid, org: org, tier: tier).utf8))!
+    static func identity(email: String, uuid: String, org: String, tier: String = "default_claude_max_20x") -> AccountIdentity {
+        AccountIdentity.parse(Data(oauth(email: email, uuid: uuid, org: org, tier: tier).utf8))!
     }
 
     static let hugePoll = #"{"schemaVersion":1,"event":"poll","ts":"2026-10-28T11:01:49Z","active":{"number":1e30,"email":"main@example.com"},"threshold":1e300,"windowsPct":{"1":{"5h":1e300,"7d":-1e300,"Fable":12.5}}}"#
@@ -26,7 +26,7 @@ struct AccountMatchingTests {
     let now = Date(timeIntervalSince1970: 1_792_850_400)
 
     /// A and B both at 5-hour windows resetting on the same hour. B is in use since `switchAt`.
-    private func twoAccountsOnTheSameHour() -> (book: AccountBook, a: ClaudeAccountIdentity, b: ClaudeAccountIdentity, reset: Date, switchAt: Date) {
+    private func twoAccountsOnTheSameHour() -> (book: AccountBook, a: AccountIdentity, b: AccountIdentity, reset: Date, switchAt: Date) {
         let a = Matching.identity(email: "a@example.com", uuid: "acct-a", org: "org-a")
         let b = Matching.identity(email: "b@example.com", uuid: "acct-b", org: "org-b")
         let reset = now.addingTimeInterval(3_600)
@@ -43,7 +43,7 @@ struct AccountMatchingTests {
 
     @Test func aReadingMatchingTwoAccountsGoesToTheOneInUseWhenTheSessionIsNew() {
         var (book, a, b, reset, switchAt) = twoAccountsOnTheSameHour()
-        let limits = ClaudeUsageLimits(fiveHour: RateLimitWindow(usedPercent: 44, windowMinutes: 300, resetsAt: reset), sevenDay: nil, observedAt: now)
+        let limits = UsageLimits(fiveHour: RateLimitWindow(usedPercent: 44, windowMinutes: 300, resetsAt: reset), sevenDay: nil, observedAt: now)
         let placed = book.record(limits, sessionStartedAt: switchAt.addingTimeInterval(60))
         #expect(placed)
         #expect(book.entries[b.key]?.fiveHour?.usedPercent == 44)
@@ -53,15 +53,15 @@ struct AccountMatchingTests {
     @Test func aReadingFromAnOlderSessionGoesToTheNewestReadingOfTheTwo() {
         var (book, a, b, reset, _) = twoAccountsOnTheSameHour()
         // B was read last: an older session's report could be either, and B is the likelier.
-        let limits = ClaudeUsageLimits(fiveHour: RateLimitWindow(usedPercent: 55, windowMinutes: 300, resetsAt: reset), sevenDay: nil, observedAt: now)
+        let limits = UsageLimits(fiveHour: RateLimitWindow(usedPercent: 55, windowMinutes: 300, resetsAt: reset), sevenDay: nil, observedAt: now)
         let placed = book.record(limits, sessionStartedAt: now.addingTimeInterval(-2_000))
         #expect(placed)
         #expect(book.entries[b.key]?.fiveHour?.usedPercent == 55)
         #expect(book.entries[a.key]?.fiveHour?.usedPercent == 30)
         // Now A is the newest reading.
         book.entries[a.key]?.limitsObservedAt = now.addingTimeInterval(30)
-        let later = ClaudeUsageLimits(fiveHour: RateLimitWindow(usedPercent: 60, windowMinutes: 300, resetsAt: reset), sevenDay: nil,
-                                      observedAt: now.addingTimeInterval(60))
+        let later = UsageLimits(fiveHour: RateLimitWindow(usedPercent: 60, windowMinutes: 300, resetsAt: reset), sevenDay: nil,
+                                observedAt: now.addingTimeInterval(60))
         book.record(later, sessionStartedAt: nil)
         #expect(book.entries[a.key]?.fiveHour?.usedPercent == 60 && book.entries[b.key]?.fiveHour?.usedPercent == 55)
     }
@@ -92,9 +92,50 @@ struct AccountMatchingTests {
         #expect(owners.first == Matching.identity(email: "a@example.com", uuid: "acct-a", org: "org-a").key)
     }
 
+    @Test func aWeekMatchingTwoAccountsResetGoesToTheNewestReading() {
+        // Weekly limits reset on the hour too: two accounts can share a week's reset.
+        var (book, a, b, _, _) = twoAccountsOnTheSameHour()
+        let week = now.addingTimeInterval(4 * 86_400)
+        book.entries[a.key]?.fiveHour = nil
+        book.entries[b.key]?.fiveHour = nil
+        book.entries[a.key]?.sevenDay = RateLimitWindow(usedPercent: 20, windowMinutes: 10_080, resetsAt: week)
+        book.entries[b.key]?.sevenDay = RateLimitWindow(usedPercent: 70, windowMinutes: 10_080, resetsAt: week.addingTimeInterval(-30))
+        let limits = UsageLimits(fiveHour: nil, sevenDay: RateLimitWindow(usedPercent: 72, windowMinutes: 10_080, resetsAt: week),
+                                 observedAt: now)
+        let placed = book.record(limits, sessionStartedAt: nil)
+        #expect(placed)
+        #expect(book.entries[b.key]?.sevenDay?.usedPercent == 72, "B was read last")
+        #expect(book.entries[a.key]?.sevenDay?.usedPercent == 20)
+    }
+
+    @Test func aSharedFiveHourResetWithADifferentWeekIsntAMatch() {
+        // Every window both sides know must match: one shared hour isn't the same account.
+        var (book, a, b, reset, _) = twoAccountsOnTheSameHour()
+        book.entries[a.key]?.sevenDay = RateLimitWindow(usedPercent: 5, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(86_400))
+        book.entries[b.key]?.sevenDay = RateLimitWindow(usedPercent: 50, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(3 * 86_400))
+        let limits = UsageLimits(fiveHour: RateLimitWindow(usedPercent: 33, windowMinutes: 300, resetsAt: reset),
+                                 sevenDay: RateLimitWindow(usedPercent: 6, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(86_400)),
+                                 observedAt: now)
+        // An older session, so the account in use doesn't win by default: only A's windows fit.
+        let placed = book.record(limits, sessionStartedAt: now.addingTimeInterval(-5_000))
+        #expect(placed)
+        #expect(book.entries[a.key]?.fiveHour?.usedPercent == 33 && book.entries[a.key]?.sevenDay?.usedPercent == 6)
+        #expect(book.entries[b.key]?.fiveHour?.usedPercent == 10 && book.entries[b.key]?.sevenDay?.usedPercent == 50)
+    }
+
+    @Test func aReadingFiledUnderTwoAccountsKeepsOnlyTheNewest() {
+        var (book, a, b, reset, _) = twoAccountsOnTheSameHour()
+        let window = RateLimitWindow(usedPercent: 40, windowMinutes: 300, resetsAt: reset)
+        book.entries[a.key]?.fiveHour = window
+        book.entries[b.key]?.fiveHour = window
+        book.removeDuplicateReadings()
+        #expect(book.entries[b.key]?.fiveHour == window, "B's reading is the newer one")
+        #expect(book.entries[a.key]?.fiveHour == nil && book.entries[a.key]?.limitsObservedAt == nil)
+    }
+
     // MARK: Same email, personal and team
 
-    private func personalAndTeam() -> (book: AccountBook, personal: ClaudeAccountIdentity, team: ClaudeAccountIdentity) {
+    private func personalAndTeam() -> (book: AccountBook, personal: AccountIdentity, team: AccountIdentity) {
         let personal = Matching.identity(email: "me@example.com", uuid: "acct-me", org: "org-personal", tier: "default_claude_max_5x")
         let team = Matching.identity(email: "me@example.com", uuid: "acct-me", org: "org-team", tier: "default_claude_team")
         var book = AccountBook()
@@ -132,8 +173,8 @@ struct AccountMatchingTests {
 
     @Test func aCodexRowInUseIsTheEntryInUse() {
         var book = AccountBook()
-        let home = ClaudeAccountIdentity(accountUUID: "user-1", email: "main@example.com", name: "Home", organizationUUID: "ws-home", tier: "plus")
-        let work = ClaudeAccountIdentity(accountUUID: "user-1", email: "main@example.com", name: "Work", organizationUUID: "ws-work", tier: "team")
+        let home = AccountIdentity(accountUUID: "user-1", email: "main@example.com", name: "Home", organizationUUID: "ws-home", tier: "plus")
+        let work = AccountIdentity(accountUUID: "user-1", email: "main@example.com", name: "Work", organizationUUID: "ws-work", tier: "team")
         book.setActive(work, at: now.addingTimeInterval(-10))
         book.setActive(home, at: now)
         let rows = [CodexSwapAccount(number: 1, email: "Main@example.com", isActive: true)]
@@ -183,7 +224,7 @@ struct AccountMatchingTests {
     // MARK: Plans
 
     @Test func anUnknownClaudeTierNeverReadsAsAChatGPTPlan() {
-        func plan(_ tier: String) -> String? { ClaudeAccountIdentity(accountUUID: "u", email: "e", tier: tier).plan }
+        func plan(_ tier: String) -> String? { AccountIdentity(accountUUID: "u", email: "e", tier: tier).plan }
         #expect(plan("default_claude_ultra") == "Ultra")
         #expect(plan("default_claude_ai") == nil, "no plan rather than a made-up one")
         #expect(plan("default_raven") == "Raven")
