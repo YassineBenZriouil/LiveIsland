@@ -1126,6 +1126,7 @@ extension Tile where Accessory == EmptyView {
 
 private struct TimerTile: View {
     @EnvironmentObject private var model: IslandModel
+    @ObservedObject private var dial = TimerDial.shared
 
     var body: some View {
         Tile(symbol: "timer", tint: .orange, title: "Timer") {
@@ -1134,6 +1135,8 @@ private struct TimerTile: View {
                     small(model.timer?.isPaused == true ? "play.fill" : "pause.fill") { model.toggleTimerPause() }
                     small("xmark") { model.cancelTimer() }
                 }
+            } else if dial.minutes != nil {
+                small("xmark") { dial.clear() }
             }
         } content: {
             if let timer = model.timer {
@@ -1153,6 +1156,25 @@ private struct TimerTile: View {
                         .foregroundStyle(.orange)
                 }
                 .buttonStyle(PressableStyle())
+            } else if let minutes = dial.minutes {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(TimerLength.label(minutes))
+                        .font(.system(size: 20, weight: .bold, design: .rounded)).monospacedDigit().foregroundStyle(.orange)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .contentTransition(.numericText(value: minutes))
+                        .animation(.snappy(duration: 0.2), value: minutes)
+                    Button {
+                        model.startTimer(minutes: minutes)
+                        dial.clear()
+                    } label: {
+                        Label("Start", systemImage: "play.fill").font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .frame(maxWidth: .infinity, minHeight: 24)
+                            .background(Capsule().fill(.orange.opacity(0.16)))
+                            .foregroundStyle(.orange)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(PressableStyle())
+                }
             } else {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 5), GridItem(.flexible(), spacing: 5)], spacing: 5) {
                     ForEach([1.0, 5, 10, 25], id: \.self) { minutes in
@@ -1168,6 +1190,13 @@ private struct TimerTile: View {
                 }
             }
         }
+        // Scrolling picks any length without typing, so the island never needs the keyboard.
+        // Only while no timer runs: a stray scroll shouldn't change one counting down.
+        .background(ScrollCatcher(isActive: model.timer == nil && !model.timerFinished) { delta, precise in
+            dial.scroll(delta, precise: precise)
+        })
+        .help(model.timer == nil ? "Scroll to pick any length" : "")
+        .onDisappear { dial.clear() }
     }
 
     private func small(_ symbol: String, action: @escaping () -> Void) -> some View {
@@ -1176,6 +1205,93 @@ private struct TimerTile: View {
                 .frame(width: 20, height: 20).background(Circle().fill(.white.opacity(0.1))).contentShape(Circle())
         }
         .buttonStyle(PressableStyle())
+    }
+}
+
+/// The length being picked by scrolling over the timer tile. Lives outside the view, since
+/// SwiftUI's @State needs Xcode's plugins; nil shows the presets.
+@MainActor
+private final class TimerDial: ObservableObject {
+    static let shared = TimerDial()
+    @Published private(set) var minutes: Double?
+    private var steps = ScrollSteps()
+
+    func scroll(_ delta: Double, precise: Bool) {
+        let count = steps.add(delta, precise: precise)
+        guard count != 0 else { return }
+        let next = TimerLength.step(minutes ?? TimerLength.initial, by: count)
+        guard next != minutes else { return }
+        minutes = next
+        // A light tick per step on a Force Touch trackpad, like a picker wheel.
+        if precise { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+    }
+
+    func clear() {
+        if minutes != nil { minutes = nil }
+        steps.reset()
+    }
+}
+
+/// Hands scroll-wheel events over its own bounds to `onScroll`, signed so that fingers or the
+/// wheel moving up mean "more" (natural scrolling is flipped back). It listens with a local
+/// monitor only while it's on screen and active, so idle costs nothing, and it never takes
+/// clicks from the buttons above it.
+private struct ScrollCatcher: NSViewRepresentable {
+    var isActive: Bool
+    var onScroll: (Double, Bool) -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        let view = CatcherView()
+        view.onScroll = onScroll
+        view.isActive = isActive
+        return view
+    }
+
+    func updateNSView(_ view: CatcherView, context: Context) {
+        view.onScroll = onScroll
+        view.isActive = isActive
+    }
+
+    final class CatcherView: NSView {
+        var isActive = false { didSet { if isActive != oldValue { updateMonitor() } } }
+        var onScroll: ((Double, Bool) -> Void)?
+        private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            updateMonitor()
+        }
+
+        private func updateMonitor() {
+            let wanted = isActive && window != nil
+            if wanted, monitor == nil {
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                    guard let self, self.handle(event) else { return event }
+                    return nil
+                }
+            } else if !wanted, let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        /// True when the scroll was over this view, and so is used up here.
+        private func handle(_ event: NSEvent) -> Bool {
+            guard let window, event.window === window,
+                  bounds.contains(convert(event.locationInWindow, from: nil)) else { return false }
+            // Momentum after the fingers lift would keep counting after the person stopped.
+            guard event.momentumPhase.isEmpty else { return true }
+            let vertical = abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+            let delta = vertical ? event.scrollingDeltaY : -event.scrollingDeltaX
+            onScroll?(Double(event.isDirectionInvertedFromDevice ? -delta : delta), event.hasPreciseScrollingDeltas)
+            return true
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
     }
 }
 

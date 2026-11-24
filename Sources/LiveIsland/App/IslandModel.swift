@@ -159,6 +159,8 @@ final class IslandModel: ObservableObject {
     let updater = Updater()
     let claudeSwap = ClaudeSwapController()
     let codexSwap = CodexSwapController()
+    /// The global shortcut that opens the island and steps through its tabs.
+    let shortcut = IslandShortcut()
     private let accountsMonitor = AccountsMonitor()
     private let scripted = ScriptedPlayers()
     private let agentMonitor = AgentMonitor()
@@ -256,6 +258,8 @@ final class IslandModel: ObservableObject {
         screen.onChange = { [weak self] in self?.receivePresence($0) }
         screen.onWake = { [weak self] in self?.didWake() }
         screen.start()
+        shortcut.onPress = { [weak self] in self?.shortcutPressed() }
+        shortcut.start()
     }
 
     func stop() {
