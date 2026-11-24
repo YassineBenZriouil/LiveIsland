@@ -8,6 +8,8 @@ private let log = Logger(subsystem: "com.aissam.liveisland", category: "levels")
 /// The real waveform: listens to what the Mac plays and moves the island's bars to it.
 ///
 /// It only listens while music plays and bars are on screen, and stops a few seconds after.
+/// "On screen" means someone can see them: not while the displays sleep, the screen is locked,
+/// another user has the screen, or the island's window is covered.
 /// The bars are Core Animation layers that it updates directly, 30 times a second, so SwiftUI
 /// redraws nothing. When the tap hears only silence while a player says it's playing (macOS
 /// didn't allow the capture), the island falls back to the animated symbol.
@@ -32,6 +34,16 @@ final class AudioLevelMeter: ObservableObject {
         }
     }
 
+    /// Set while nobody can see the screen; the tap closes right away instead of after a pause,
+    /// so it's built fresh (on the current device and rate) when the screen comes back.
+    var isSuspended = false {
+        didSet {
+            guard isSuspended != oldValue else { return }
+            if isSuspended { timer?.invalidate(); timer = nil; closeTap() }
+            refresh()
+        }
+    }
+
     private let views = NSHashTable<LevelBarsView>.weakObjects()
     private let analyzer = AudioLevels(bandCount: 8)
     private var samples = [Float](repeating: 0, count: AudioLevels.fftSize)
@@ -42,6 +54,9 @@ final class AudioLevelMeter: ObservableObject {
     private var listeningSince = Date()
     private var lastHeard: Date?
     private var outputListener: AudioObjectPropertyListenerBlock?
+    private var deviceListener: AudioObjectPropertyListenerBlock?
+    private var deviceWatched: [(AudioObjectID, AudioObjectPropertyAddress)] = []
+    private var rebuildWork: DispatchWorkItem?
     private static var defaultOutput = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain)
@@ -56,10 +71,36 @@ final class AudioLevelMeter: ObservableObject {
         refresh()
     }
 
+    /// A bars view became visible or hidden (its window covered, moved off, or shown again).
+    func visibilityChanged() {
+        refresh()
+    }
+
     func stop() {
         timer?.invalidate()
         timer = nil
         closeTap()
+    }
+
+    /// Builds the tap again, if one is open: after wake the old aggregate device can be dead
+    /// while still looking fine, and stays quiet.
+    func rebuild(_ reason: String) {
+        rebuildWork?.cancel()
+        rebuildWork = nil
+        guard tap != nil else { return }
+        log.notice("\(reason, privacy: .public): listening again")
+        timer?.invalidate()
+        timer = nil
+        closeTap()
+        refresh()
+    }
+
+    /// Coalesces a burst of device notices (a codec switch sends several) into one rebuild.
+    private func scheduleRebuild(_ reason: String) {
+        rebuildWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.rebuild(reason) } }
+        rebuildWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     private func refresh() {
@@ -68,7 +109,7 @@ final class AudioLevelMeter: ObservableObject {
         let available = isEnabled && supported && !failed
         if isAvailable != available { isAvailable = available }
 
-        if available, isPlaying, !views.allObjects.isEmpty {
+        if available, isPlaying, !isSuspended, views.allObjects.contains(where: \.isOnScreen) {
             closeWork?.cancel()
             closeWork = nil
             if tap == nil { openTap() }
@@ -111,20 +152,15 @@ final class AudioLevelMeter: ObservableObject {
     private func openTap() {
         guard #available(macOS 14.2, *) else { return }
         do {
-            tap = try SystemAudioTap()
+            let tap = try SystemAudioTap()
+            self.tap = tap
             // The tap is tied to the output device: follow it when it changes (AirPods connecting).
             let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                MainActor.assumeIsolated {
-                    guard let self, self.tap != nil else { return }
-                    log.notice("Output device changed: listening again")
-                    self.closeTap()
-                    self.timer?.invalidate()
-                    self.timer = nil
-                    self.refresh()
-                }
+                MainActor.assumeIsolated { self?.scheduleRebuild("Output device changed") }
             }
             AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &Self.defaultOutput, .main, listener)
             outputListener = listener
+            watchDevice(of: tap)
         } catch {
             log.error("Couldn't listen: \(error.localizedDescription, privacy: .public)")
             failed = true
@@ -132,13 +168,46 @@ final class AudioLevelMeter: ObservableObject {
         }
     }
 
+    /// Rebuilds when the output device changes rate (AirPods switching to the call codec) or
+    /// goes away, which the default-output notice alone doesn't tell.
+    @available(macOS 14.2, *)
+    private func watchDevice(of tap: SystemAudioTap) {
+        let device = tap.outputID
+        let builtRate = tap.outputRate
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                guard let self, self.tap === tap else { return }
+                let rate = HAL.nominalRate(device)
+                guard TapRebuild.isNeeded(builtAt: builtRate, nowAt: rate, isAlive: HAL.isAlive(device)) else { return }
+                self.scheduleRebuild("Output device changed rate or went away")
+            }
+        }
+        for selector in [kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyDeviceIsAlive] {
+            var address = HAL.address(selector)
+            if AudioObjectAddPropertyListenerBlock(device, &address, .main, listener) == noErr {
+                deviceWatched.append((device, address))
+            }
+        }
+        deviceListener = listener
+    }
+
     private func closeTap() {
         closeWork?.cancel()
         closeWork = nil
+        rebuildWork?.cancel()
+        rebuildWork = nil
         if let listener = outputListener {
             AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &Self.defaultOutput, .main, listener)
         }
         outputListener = nil
+        if let listener = deviceListener {
+            for (device, address) in deviceWatched {
+                var address = address
+                AudioObjectRemovePropertyListenerBlock(device, &address, .main, listener)
+            }
+        }
+        deviceWatched = []
+        deviceListener = nil
         if #available(macOS 14.2, *) { (tap as? SystemAudioTap)?.stop() }
         tap = nil
     }
@@ -155,6 +224,9 @@ final class AudioLevelMeter: ObservableObject {
 final class SystemAudioTap {
     let ring = SampleRing()
     private(set) var sampleRate: Double = 48_000
+    /// The output device the tap follows, and its nominal rate when the tap was built.
+    private(set) var outputID = AudioObjectID(kAudioObjectUnknown)
+    private(set) var outputRate: Double = 0
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -173,6 +245,8 @@ final class SystemAudioTap {
         let output: AudioObjectID = try HAL.value(HAL.system, kAudioHardwarePropertyDefaultOutputDevice)
         guard output != kAudioObjectUnknown else { throw HAL.Failure(action: "find the output device", status: -1) }
         let outputUID = try HAL.string(output, kAudioDevicePropertyDeviceUID)
+        outputID = output
+        outputRate = HAL.nominalRate(output) ?? 0
 
         let description = CATapDescription(monoGlobalTapButExcludeProcesses: HAL.processObject(for: getpid()).map { [$0] } ?? [])
         description.name = "LiveIsland levels"
@@ -330,6 +404,16 @@ private enum HAL {
         try check(AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value), "read a name")
         guard let value else { throw Failure(action: "read a name", status: -1) }
         return value.takeRetainedValue() as String
+    }
+
+    static func nominalRate(_ device: AudioObjectID) -> Double? {
+        try? value(device, kAudioDevicePropertyNominalSampleRate) as Float64
+    }
+
+    /// Unknown counts as alive: a failed read shouldn't tear the tap down.
+    static func isAlive(_ device: AudioObjectID) -> Bool {
+        guard let alive = try? value(device, kAudioDevicePropertyDeviceIsAlive) as UInt32 else { return true }
+        return alive != 0
     }
 
     static func streamCount(_ device: AudioObjectID, scope: AudioObjectPropertyScope) -> Int {

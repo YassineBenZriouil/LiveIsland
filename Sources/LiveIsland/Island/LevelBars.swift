@@ -79,7 +79,15 @@ final class LevelBarsView: NSView {
         didSet { if isLive != oldValue, !isLive { rest() } }
     }
 
+    /// In a window that some part of is visible: covered, ordered out or on a sleeping
+    /// display, the bars don't need the meter.
+    var isOnScreen: Bool {
+        guard let window else { return false }
+        return window.occlusionState.contains(.visible)
+    }
+
     private let style: Style
+    private var occlusionToken: NSObjectProtocol?
     private let glow = CALayer()
     private var bars: [CAGradientLayer] = []
     private var heights: [CGFloat]
@@ -112,9 +120,28 @@ final class LevelBarsView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if let occlusionToken { NotificationCenter.default.removeObserver(occlusionToken) }
+        occlusionToken = nil
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { meter?.attach(self) } else { meter?.detach(self) }
+        if let window {
+            occlusionToken = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.meter?.visibilityChanged() }
+            }
+            meter?.attach(self)
+        } else {
+            meter?.detach(self)
+        }
+    }
+
+    deinit {
+        if let occlusionToken { NotificationCenter.default.removeObserver(occlusionToken) }
     }
 
     override func viewDidChangeBackingProperties() {
