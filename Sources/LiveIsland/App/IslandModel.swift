@@ -91,7 +91,7 @@ final class IslandModel: ObservableObject {
         didSet {
             accountsMonitor.isVisible = isExpanded && tab == .accounts
             claudeSwap.showingInIsland = isExpanded && tab == .accounts
-            codexSwap.isVisible = isExpanded && tab == .accounts
+            codexSwap.showingInIsland = isExpanded && tab == .accounts
         }
     }
     /// Claude and Codex accounts and their limits.
@@ -863,7 +863,7 @@ final class IslandModel: ObservableObject {
         isExpanded = true
         accountsMonitor.isVisible = tab == .accounts
         claudeSwap.showingInIsland = tab == .accounts
-        codexSwap.isVisible = tab == .accounts
+        codexSwap.showingInIsland = tab == .accounts
         if timerFinished { dismissTimerAlert() }
         // Spotify and Music don't say when someone seeks inside them; check while open.
         if controlPlayers {
@@ -883,7 +883,7 @@ final class IslandModel: ObservableObject {
         showsWelcome = false
         accountsMonitor.isVisible = false
         claudeSwap.showingInIsland = false
-        codexSwap.isVisible = false
+        codexSwap.showingInIsland = false
         scrubbing = nil
         selectedPlayerID = nil
         playerRefresh?.invalidate()

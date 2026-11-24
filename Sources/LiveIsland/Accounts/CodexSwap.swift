@@ -67,10 +67,16 @@ final class CodexSwapController: ObservableObject {
     private var refreshTimer: Timer?
     private var stopping = false
     private var minutes = 0
-    /// Asked for more often while an accounts page is open.
+    /// Asked for more often while Settings › Accounts is open.
     var isVisible = false {
-        didSet { if isVisible && !oldValue { Task { await refresh() } } }
+        didSet { if isVisible && !oldValue && !showingInIsland { Task { await refresh() } } }
     }
+    /// The same, for the island's Accounts tab. Kept apart from `isVisible` so the island
+    /// closing doesn't slow refreshes while Settings still shows the accounts.
+    var showingInIsland = false {
+        didSet { if showingInIsland && !oldValue && !isVisible { Task { await refresh() } } }
+    }
+    private var isWatched: Bool { isVisible || showingInIsland }
 
     init() {
         autoSwitch = UserDefaults.standard.bool(forKey: Self.autoKey)
@@ -107,7 +113,7 @@ final class CodexSwapController: ObservableObject {
                 // ccswap asks OpenAI for every account's usage: once a minute while someone
                 // looks, every five minutes otherwise.
                 self.minutes += 1
-                if self.isVisible || self.minutes % 5 == 0 { Task { await self.refresh() } }
+                if self.isWatched || self.minutes % 5 == 0 { Task { await self.refresh() } }
             }
         }
     }
