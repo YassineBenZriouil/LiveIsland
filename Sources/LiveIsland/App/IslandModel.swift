@@ -63,6 +63,10 @@ final class IslandModel: ObservableObject {
     @Published private(set) var transient: IslandActivity?
     /// Bumped every 30 s so time-based activities ("starts in 8m") stay current.
     @Published private(set) var clock = Date()
+    /// The Mac is going to sleep or sleeps: anything periodic can wait for the wake.
+    @Published private(set) var isAsleep = false
+    /// Nobody can see the screen (displays asleep, locked, another user): on-screen work pauses.
+    @Published private(set) var isScreenAway = false
 
     // Island state (lives here: SwiftUI's @State needs Xcode's plugins to build)
     @Published private(set) var isExpanded = false
@@ -148,6 +152,10 @@ final class IslandModel: ObservableObject {
     private let defaults = UserDefaults.standard
     private var hoverWork: DispatchWorkItem?
     private var timerWork: DispatchWorkItem?
+    /// Clears the finished alert after a while; cancelled when a new timer starts, so the
+    /// first timer's alert can't clear the second.
+    private var timerAlertWork: DispatchWorkItem?
+    private let screen = ScreenWatcher()
     private var transientWork: DispatchWorkItem?
     private var clockTimer: Timer?
     private var playerRefresh: Timer?
@@ -225,9 +233,10 @@ final class IslandModel: ObservableObject {
         agentMonitor.start()
         systemMonitor.start()
         calendar.start()
-        clockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.clock = Date() }
-        }
+        startClock()
+        screen.onChange = { [weak self] in self?.receivePresence($0) }
+        screen.onWake = { [weak self] in self?.didWake() }
+        screen.start()
     }
 
     func stop() {
@@ -244,6 +253,37 @@ final class IslandModel: ObservableObject {
         calendar.stop()
         clockTimer?.invalidate()
         playerRefresh?.invalidate()
+        screen.stop()
+    }
+
+    // MARK: - Sleep and wake
+
+    private func startClock() {
+        clockTimer?.invalidate()
+        clock = Date()
+        clockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clock = Date() }
+        }
+    }
+
+    private func receivePresence(_ presence: ScreenPresence) {
+        if isAsleep != presence.isAsleep { isAsleep = presence.isAsleep }
+        if isScreenAway != presence.isAway { isScreenAway = presence.isAway }
+        levels.isSuspended = presence.isAway
+        if presence.isAway {
+            // Nobody sees "starts in 8m" or an open island now; catch up when they're back.
+            clockTimer?.invalidate()
+            clockTimer = nil
+            if isExpanded { collapse() }
+        } else if clockTimer == nil {
+            startClock()
+        }
+    }
+
+    private func didWake() {
+        // Deadlines counted in uptime missed the sleep: settle the timer by the wall clock.
+        scheduleTimerEnd()
+        levels.rebuild("Woke from sleep")
     }
 
     // MARK: - Players
@@ -663,7 +703,7 @@ final class IslandModel: ObservableObject {
 
     func startTimer(minutes: Double) {
         timer = CountdownTimer(duration: minutes * 60)
-        timerFinished = false
+        dismissTimerAlert()
         scheduleTimerEnd()
     }
 
@@ -686,21 +726,39 @@ final class IslandModel: ObservableObject {
     }
 
     func dismissTimerAlert() {
+        timerAlertWork?.cancel()
+        timerAlertWork = nil
         timerFinished = false
     }
 
+    /// Schedules the chime by the wall clock (`wallDeadline`), which keeps counting while the
+    /// Mac sleeps; uptime doesn't, so a 10-minute timer would ring 10 minutes after waking.
     private func scheduleTimerEnd() {
         timerWork?.cancel()
-        guard let timer else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, let timer = self.timer, timer.isFinished(at: Date()) else { return }
-            self.timer = nil
-            self.timerFinished = true
-            NSSound(named: "Glass")?.play()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in self?.timerFinished = false }
-        }
+        timerWork = nil
+        guard let timer, !timer.isPaused else { return }
+        let work = DispatchWorkItem { [weak self] in self?.finishTimerIfDue() }
         timerWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + timer.remaining(at: Date()), execute: work)
+        DispatchQueue.main.asyncAfter(wallDeadline: .now() + timer.remaining(at: Date()), execute: work)
+    }
+
+    private func finishTimerIfDue() {
+        guard let timer, timer.isFinished(at: Date()) else {
+            // Woken a little early (the clock moved): try again at the real end.
+            if timer != nil { scheduleTimerEnd() }
+            return
+        }
+        self.timer = nil
+        timerWork = nil
+        timerFinished = true
+        NSSound(named: "Glass")?.play()
+        timerAlertWork?.cancel()
+        let clear = DispatchWorkItem { [weak self] in
+            self?.timerFinished = false
+            self?.timerAlertWork = nil
+        }
+        timerAlertWork = clear
+        DispatchQueue.main.asyncAfter(wallDeadline: .now() + 12, execute: clear)
     }
 
     // MARK: - Other actions
