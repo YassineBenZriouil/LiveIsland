@@ -24,17 +24,35 @@ final class NowPlayingProvider {
     private var pending = Data()
     private var restartDelay: TimeInterval = 1
     private var stopped = false
+    /// Counts launches, so late output or a late exit from an adapter that's been replaced
+    /// never lands on the one running now.
+    private var generation = 0
 
     private var script: URL? { Bundle.main.url(forResource: "mediaremote-adapter", withExtension: "pl") }
     private var framework: URL? { Bundle.main.url(forResource: "MediaRemoteAdapter", withExtension: "framework") }
 
     func start() {
         stopped = false
+        guard process == nil else { return }
         guard let script, let framework else {
             log.error("Media adapter is missing from the app bundle")
             return
         }
-        Self.endOrphans(of: script)
+        generation += 1
+        let launch = generation
+        // A half line from the last adapter would spoil the new one's first line.
+        pending = Data()
+        // Listing every process takes a moment, which the main thread shouldn't wait for.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            Self.endOrphans(of: script)
+            DispatchQueue.main.async {
+                guard let self, !self.stopped, self.process == nil, self.generation == launch else { return }
+                self.launch(script: script, framework: framework, generation: launch)
+            }
+        }
+    }
+
+    private func launch(script: URL, framework: URL, generation launch: Int) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         process.arguments = [script.path, framework.path, "stream", "--no-diff", "--debounce=60"]
@@ -43,11 +61,15 @@ final class NowPlayingProvider {
         process.standardError = FileHandle.nullDevice
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
-            guard !chunk.isEmpty else { return }
-            DispatchQueue.main.async { self?.receive(chunk) }
+            guard !chunk.isEmpty else {
+                // End of file: left in place, the handler would keep firing on the closed pipe.
+                handle.readabilityHandler = nil
+                return
+            }
+            DispatchQueue.main.async { self?.receive(chunk, from: launch) }
         }
         process.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async { self?.adapterExited() }
+            DispatchQueue.main.async { self?.adapterExited(launch) }
         }
         do {
             try process.run()
@@ -76,8 +98,8 @@ final class NowPlayingProvider {
     }
 
     /// An adapter left behind by an instance that was killed outright keeps running under
-    /// launchd; there's only ever one island, so those can go.
-    private static func endOrphans(of script: URL) {
+    /// launchd; there's only ever one island, so those can go. Runs off the main thread.
+    private nonisolated static func endOrphans(of script: URL) {
         let ps = Process()
         ps.executableURL = URL(fileURLWithPath: "/bin/ps")
         ps.arguments = ["-axo", "pid=,ppid=,command="]
@@ -108,7 +130,8 @@ final class NowPlayingProvider {
         try? process.run()
     }
 
-    private func receive(_ chunk: Data) {
+    private func receive(_ chunk: Data, from launch: Int) {
+        guard launch == generation else { return }
         pending.append(chunk)
         var latest = current
         let consumed = JSONLScanner.forEachLine(in: pending) { line in
@@ -125,12 +148,17 @@ final class NowPlayingProvider {
     }
 
     /// The adapter shouldn't exit; if it does, bring it back with growing delays.
-    private func adapterExited() {
+    /// What it said last can't be trusted once it's gone: a "playing" would stay on screen
+    /// for a song that has stopped.
+    private func adapterExited(_ launch: Int) {
+        guard launch == generation else { return }
         process = nil
+        pending = Data()
+        if current != nil { publish(nil) }
         guard !stopped else { return }
         log.error("Media adapter exited; restarting in \(self.restartDelay)s")
         DispatchQueue.main.asyncAfter(deadline: .now() + restartDelay) { [weak self] in
-            guard let self, !self.stopped, self.process == nil else { return }
+            guard let self, !self.stopped, self.process == nil, self.generation == launch else { return }
             self.start()
         }
         restartDelay = min(restartDelay * 2, 60)
