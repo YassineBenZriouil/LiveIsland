@@ -4,18 +4,20 @@ import Foundation
 public enum Format {
     /// 950, 12.4K, 3.2M, 1.1B
     public static func tokens(_ count: Int) -> String {
+        guard count >= 1_000 else { return "\(count)" }
         let value = Double(count)
-        switch value {
-        case ..<1_000: return "\(count)"
-        case ..<1_000_000: return trimmed(value / 1_000) + "K"
-        case ..<1_000_000_000: return trimmed(value / 1_000_000) + "M"
-        default: return trimmed(value / 1_000_000_000) + "B"
+        // Round first, then pick the unit: 999,950 rounds to 1000K, which reads as 1M.
+        let units: [(scale: Double, suffix: String)] = [(1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B")]
+        for (index, unit) in units.enumerated() {
+            let shown = rounded(value / unit.scale)
+            if shown < 1_000 || index == units.count - 1 { return trimmed(shown) + unit.suffix }
         }
+        return "\(count)"
     }
 
     /// 0:42, 12:05, 1:02:05
     public static func clock(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds.rounded(.down)))
+        let total = wholeSeconds(seconds.rounded(.down))
         let hours = total / 3600, minutes = (total % 3600) / 60, secs = total % 60
         return hours > 0
             ? String(format: "%d:%02d:%02d", hours, minutes, secs)
@@ -24,7 +26,7 @@ public enum Format {
 
     /// 45s, 12m, 1h 5m, 2d 4h
     public static func span(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds.rounded()))
+        let total = wholeSeconds(seconds.rounded())
         switch total {
         case ..<60: return "\(total)s"
         case ..<3600: return "\(total / 60)m"
@@ -53,7 +55,11 @@ public enum Format {
         var utf8 = text.utf8.makeIterator()
         var bytes: [UInt8] = []
         bytes.reserveCapacity(32)
-        while let byte = utf8.next(), bytes.count < 40 { bytes.append(byte) }
+        while let byte = utf8.next() {
+            // Longer than any timestamp this path reads: leave it to the formatter.
+            guard bytes.count < 40 else { return nil }
+            bytes.append(byte)
+        }
         guard bytes.count >= 20, bytes[4] == 0x2D, bytes[7] == 0x2D, bytes[10] == 0x54,
               bytes[13] == 0x3A, bytes[16] == 0x3A else { return nil }
         func number(_ range: Range<Int>) -> Int? {
@@ -67,7 +73,8 @@ public enum Format {
         }
         guard let year = number(0..<4), let month = number(5..<7), let day = number(8..<10),
               let hour = number(11..<13), let minute = number(14..<16), let second = number(17..<19),
-              (1...12).contains(month), (1...31).contains(day)
+              (1...12).contains(month), (1...daysIn(month: month, year: year)).contains(day),
+              (0...23).contains(hour), (0...59).contains(minute), (0...59).contains(second)
         else { return nil }
         var index = 19
         var fraction = 0.0
@@ -90,6 +97,29 @@ public enum Format {
         let days = era * 146_097 + dayOfEra - 719_468
         let seconds = Double(days * 86_400 + hour * 3600 + minute * 60 + second) + fraction
         return Date(timeIntervalSince1970: seconds)
+    }
+
+    private static func daysIn(month: Int, year: Int) -> Int {
+        switch month {
+        case 2: return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28
+        case 4, 6, 9, 11: return 30
+        default: return 31
+        }
+    }
+
+    /// Seconds as a whole number that can't trap: `Int(.infinity)` and `Int(1e20)` crash, and
+    /// a link or a bad line can hand over either. NaN counts as nothing, too much as the most.
+    static func wholeSeconds(_ seconds: TimeInterval) -> Int {
+        guard !seconds.isNaN else { return 0 }
+        return Int(min(max(0, seconds), longestSeconds))
+    }
+
+    /// About 31,700 years: far more than any clock shows, far less than `Int.max`.
+    static let longestSeconds: TimeInterval = 1e12
+
+    /// What `trimmed` shows: whole numbers from 100 up, one decimal below.
+    private static func rounded(_ value: Double) -> Double {
+        value >= 100 ? value.rounded() : (value * 10).rounded() / 10
     }
 
     private static func trimmed(_ value: Double) -> String {
