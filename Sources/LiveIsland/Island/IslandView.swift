@@ -40,11 +40,11 @@ struct IslandView: View {
             .clipShape(shape)
             .contentShape(shape)
             .onTapGesture { if !model.isExpanded { model.expand() } }
-            // Floating, it needs a little shadow even closed, or it's lost on a dark desktop.
             .overlay {
                 // While it follows the pointer, an outline shows where it will land.
                 if moving { shape.stroke(.white.opacity(0.5), lineWidth: 1) }
             }
+            // Floating, it needs a little shadow even closed, or it's lost on a dark desktop.
             .shadow(color: .black.opacity(model.isExpanded ? 0.5 : (layout.isFloating ? 0.35 : 0)),
                     radius: model.isExpanded ? 22 : 8, y: model.isExpanded ? 12 : 3)
             .offset(x: layout.horizontalOffset(expanded: model.isExpanded, active: primary != nil))

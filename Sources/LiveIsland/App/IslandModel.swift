@@ -61,7 +61,9 @@ final class IslandModel: ObservableObject {
     @Published private(set) var timer: CountdownTimer?
     @Published private(set) var timerFinished = false
     @Published private(set) var transient: IslandActivity?
-    /// Bumped every 30 s so time-based activities ("starts in 8m") stay current.
+    /// Bumped every 30 s, only while something on screen changes with time alone ("starts in
+    /// 8m", a limit about to reset), so the idle island isn't redrawn for nothing. Only a redraw
+    /// trigger: what's shown reads the time itself.
     @Published private(set) var clock = Date()
     /// The Mac is going to sleep or sleeps: anything periodic can wait for the wake.
     @Published private(set) var isAsleep = false
@@ -82,8 +84,6 @@ final class IslandModel: ObservableObject {
     @Published private(set) var accountsState = AccountsMonitor.Snapshot()
     /// Which accounts the Accounts page lists.
     @Published var accountsKind: AgentKind = .claude
-    /// The session row the pointer is over, for its actions.
-    @Published var hoveredSession: String?
     /// Where the pointer is dragging the progress bar, 0…1.
     @Published var scrubbing: Double?
     @Published var copiedSession: String?
@@ -280,9 +280,10 @@ final class IslandModel: ObservableObject {
     private func startClock() {
         clockTimer?.invalidate()
         clock = Date()
-        clockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.clock = Date() }
+        clockTimer = Timer.scheduledTimer(withTimeInterval: ClockTicks.interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tickClock() }
         }
+        clockTimer?.tolerance = 5
     }
 
     private func receivePresence(_ presence: ScreenPresence) {
@@ -358,11 +359,12 @@ final class IslandModel: ObservableObject {
     }
 
     /// Players that are installed but have nothing loaded: one tap opens and plays them.
+    /// Asked on every redraw, so where each app lives comes from `AppInfo`'s cache.
     var idlePlayers: [String] {
         guard controlPlayers else { return [] }
         let loaded = Set(players.compactMap(\.bundleIdentifier))
         return ScriptedPlayers.all.map(\.bundleIdentifier).filter {
-            !loaded.contains($0) && NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
+            !loaded.contains($0) && AppInfo.url($0) != nil
         }
     }
 
@@ -445,19 +447,19 @@ final class IslandModel: ObservableObject {
     /// gave when it refused a request. A refusal still pending from the previous account
     /// doesn't count.
     var exhaustedAccount: ClaudeAccount? {
-        guard let active = accountsState.active, active.current(at: clock).isAtLimit else { return nil }
+        guard let active = accountsState.active, active.current(at: Date()).isAtLimit else { return nil }
         return active
     }
 
     /// Where to go next: the account with the most room that can be switched to.
-    var bestAccount: ClaudeAccount? { ClaudeAccount.best(accounts, at: clock) }
+    var bestAccount: ClaudeAccount? { ClaudeAccount.best(accounts, at: Date()) }
 
     var exhaustedCodexAccount: ClaudeAccount? {
-        guard let active = accountsState.activeCodex, active.current(at: clock).isAtLimit else { return nil }
+        guard let active = accountsState.activeCodex, active.current(at: Date()).isAtLimit else { return nil }
         return active
     }
 
-    var bestCodexAccount: ClaudeAccount? { ClaudeAccount.best(codexAccounts, at: clock) }
+    var bestCodexAccount: ClaudeAccount? { ClaudeAccount.best(codexAccounts, at: Date()) }
 
     /// Claude accounts switch through claude-swap, Codex ones through ccswap.
     /// Only says "Now on" when the switch happened; one switch at a time.
@@ -628,7 +630,23 @@ final class IslandModel: ObservableObject {
 
     /// An event starting within 10 minutes, or that started in the last 2.
     func upcomingEvent(at now: Date) -> CalendarProvider.Event? {
-        events.first { $0.start.timeIntervalSince(now) < 600 && now.timeIntervalSince($0.start) < 120 }
+        events.first { ClockTicks.isSoon($0.start, at: now) }
+    }
+
+    /// Redraws the island only when the time alone changes what it shows; otherwise a 30 s
+    /// bump would redraw every view for nothing, all day.
+    private func tickClock() {
+        let now = Date()
+        // As of the last redraw: a limit that reset since then is gone now, and must be redrawn away.
+        let limitShown = showAgents && [accountsState.active, accountsState.activeCodex].contains {
+            $0?.current(at: clock).isAtLimit == true
+        }
+        let needed = ClockTicks.needed(since: clock, now: now,
+                                       timerRunning: timer != nil,
+                                       inCall: showCalls && system.call != nil,
+                                       limitShown: limitShown,
+                                       eventStarts: showCalendar ? events.map(\.start) : [])
+        if needed { clock = now }
     }
 
     // MARK: - Hover and expansion
@@ -678,7 +696,6 @@ final class IslandModel: ObservableObject {
         accountsMonitor.isVisible = false
         claudeSwap.showingInIsland = false
         codexSwap.isVisible = false
-        hoveredSession = nil
         scrubbing = nil
         selectedPlayerID = nil
         playerRefresh?.invalidate()
