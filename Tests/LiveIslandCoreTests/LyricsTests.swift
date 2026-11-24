@@ -302,6 +302,9 @@ struct LyricsPanelTests {
         #expect(gap.upperBound == 858.5)
         #expect(beside.leadingWidth == 653.5)
         #expect(beside.trailingWidth == 1512 - 858.5)
+        #expect(beside.height == 44)
+        let tallNotch = CGRect(x: 663.5, y: 932, width: 185, height: 50)
+        #expect(LyricsHeaderLayout(panel: band, notch: tallNotch).height == 50, "the words start below the camera")
 
         // A card no wider than the notch's surroundings: the header drops below the camera.
         let card = CGRect(x: 606, y: 762, width: 300, height: 220)

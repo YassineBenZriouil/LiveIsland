@@ -71,7 +71,7 @@
         <div><div class="shot"><img src="https://raw.githubusercontent.com/charonova/LiveIsland/main/demo/island-activity.png" alt="Activity tab"></div><p class="caption">Activity: timers, calendar, devices</p></div>
       </div>
       <ul>
-        <li><b>Media</b>: any player, with a real waveform, the cover's glow, scrubbing, ±15 s, Up Next and Recently Played</li>
+        <li><b>Media</b>: any player, with a real waveform, the cover's glow, scrubbing, ±15 s, Up Next and Recently Played. <b>Sing With Me</b> (off until you turn it on) shows the song's lyrics in time with it, in a window you can resize from any edge</li>
         <li><b>Agents</b>: every Claude Code and Codex session (working, needs you, done, idle). Click one to jump to its window or Terminal tab, or copy its resume command. Rings show each tool's limits: the week, 5 hours when the plan has that limit, and a model's own week</li>
         <li><b>Activity</b>: timers, calendar, battery, headphones, microphone and camera</li>
         <li><b>Accounts</b>: each account's use, with Switch and Auto (see below)</li>
@@ -132,6 +132,7 @@
         <tr><td><code>liveisland://open</code> · <code>close</code></td><td>Open or close the island. Add <code>/media</code>, <code>/agents</code>, <code>/activity</code>, <code>/accounts</code> or <code>/accounts/codex</code> to pick a page</td></tr>
         <tr><td><code>liveisland://settings/…</code></td><td><code>general</code>, <code>island</code>, <code>media</code>, <code>agents</code>, <code>accounts</code>, <code>updates</code>, <code>about</code>. After <code>accounts</code>: <code>claude</code> or <code>codex</code>, then <code>automatic</code> or <code>console</code>, as in <code>settings/accounts/codex/console</code></td></tr>
         <tr><td><code>liveisland://timer/5</code></td><td>Start a 5-minute timer</td></tr>
+        <tr><td><code>liveisland://lyrics</code> · <code>lyrics/open</code> · <code>lyrics/close</code></td><td>Show or hide Sing With Me's lyrics</td></tr>
         <tr><td><code>liveisland://update</code> · <code>update/install</code></td><td>Check for a new version, and install it</td></tr>
       </table>
 
@@ -143,6 +144,7 @@
         <li>No analytics, no account. Transcripts, calendar events and everything else stay on your Mac.</li>
         <li>LiveIsland never reads a login. claude-swap keeps Claude's logins in your Keychain, and ccswap keeps Codex's as private files in LiveIsland's folder. The console lives only in memory.</li>
         <li>Network requests: Spotify's cover art, and one GitHub check a day for updates. The switchers ask Anthropic and OpenAI for each account's use, as they do on their own.</li>
+        <li>Sing With Me is the only feature that talks to a third party. Once you turn it on, it sends <a href="https://lrclib.net">LRCLIB</a> the song's title, artist, album and length, and nothing else, only while a song plays and you're looking at the lyrics. Each song is asked for once and kept on your Mac.</li>
       </ul>
 
       <h2 id="faq">Troubleshooting</h2>

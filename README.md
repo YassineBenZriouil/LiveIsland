@@ -122,6 +122,7 @@ The island's **Accounts** tab has the same switch, with each tool's **Auto** but
 - Any app that plays audio or video; Spotify and Music read directly, so a paused Spotify stays one tap away while a video plays
 - A real waveform that moves with the music (macOS 14.2+), a glow from the cover, scrubbing, ±15 s, Up Next and Recently Played
 - System volume and output device under the player
+- **Sing With Me** (off until you turn it on): the song's lyrics in time with it, Spotify-style, in a window that hangs from the notch. Drag any edge to resize it or pick a preset (full-width band, full screen, wide island, compact card); click a line to jump there
 
 **Everything else**
 - Calls (FaceTime, Zoom, Teams, Discord, Slack…), which app uses the microphone, whether the camera is on
@@ -149,6 +150,7 @@ Claude Code shares its limit percentages (the week, and 5 hours on plans that ha
 - **No logins.** claude-swap keeps the Claude logins in your Keychain, and ccswap keeps the Codex logins as private files in LiveIsland's folder. LiveIsland only shows what they say, and keeps the console in memory.
 - **The waveform only listens.** It measures the sound in memory, only while music plays and the bars are on screen, and never changes, records or keeps it.
 - **Few network requests.** LiveIsland downloads Spotify's cover art and checks GitHub once a day for a new version, which you can turn off. claude-swap and ccswap ask Anthropic and OpenAI for each account's use, as they do on their own.
+- **Sing With Me is the one feature that talks to a third party.** It's off until you turn it on. Then, to find lyrics, it sends [LRCLIB](https://lrclib.net) the song's title, artist, album and length (nothing else, and no identifier of you or your Mac), only while a song plays and you're looking at the Media tab or the lyrics. Each answer is kept in `~/Library/Application Support/LiveIsland/lyrics`, so a song is asked for once.
 
 macOS asks for **Calendar**, **Bluetooth** (AirPods), **Automation** (Spotify, Music, and Terminal or iTerm2 when you jump to a session) and **System audio recording** (the waveform). Everything works without them; that feature just stays empty.
 
@@ -181,6 +183,7 @@ git clone https://github.com/charonova/LiveIsland.git && cd LiveIsland
 | `liveisland://open` · `close` | Open or close the island; `open/media`, `agents`, `activity`, `accounts`, `accounts/codex` pick a page |
 | `liveisland://settings/accounts/codex/console` | Open Settings on a page: `general`, `island`, `media`, `agents`, `accounts` (then `claude` or `codex`, and `automatic` or `console`), `updates`, `about` |
 | `liveisland://timer/5` | Start a 5-minute timer |
+| `liveisland://lyrics` · `lyrics/open` · `lyrics/close` | Show or hide Sing With Me's lyrics (while it's off, it asks first) |
 | `liveisland://move` · `move/top` | Move the island: it follows the pointer until you press ⌘; or put it back on the top edge |
 | `liveisland://update` · `update/install` | Check for a new version, and install it |
 
