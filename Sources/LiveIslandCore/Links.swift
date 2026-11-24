@@ -28,4 +28,22 @@ public enum LinkValue {
               let number = Int(text), number > 0 else { return nil }
         return .number(number)
     }
+
+    /// What lyrics… asks of Sing With Me: lyrics toggles it, lyrics/open and lyrics/close do
+    /// what they say. Opening only shows the window: with Sing With Me off, it asks first.
+    public enum LyricsAction: Equatable, Sendable {
+        case toggle
+        case open
+        case close
+    }
+
+    public static func lyricsAction(_ text: String?) -> LyricsAction? {
+        switch text?.lowercased() {
+        case nil, "": return .toggle
+        case "open", "show": return .open
+        case "close", "hide": return .close
+        case "toggle": return .toggle
+        default: return nil
+        }
+    }
 }
