@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// liveisland:// links, e.g. from Shortcuts: open[/media|agents|activity|accounts[/claude|codex]], close,
     /// settings[/general|island|media|agents|accounts[/claude|codex][/accounts|automatic|console]|updates|about], update[/install], timer/<minutes>,
+    /// switch/best, switch/<n>, switch/codex/best, switch/codex/<n>,
     /// move (the island follows the pointer until ⌘), move/top (back on the top edge).
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.scheme == "liveisland" {
@@ -56,12 +57,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "move":
                 if detail == "top" { model.islandPlacement = nil } else { model.beginMovingIsland() }
             case "update":
-                // update: check now and show the result; update/install also installs what it finds.
-                let install = detail == "install"
+                // update and update/install both check now and show Software Update, where
+                // Update Now waits for the person's tap: any web page can open a link, so a
+                // link never installs on its own.
                 model.openSettings(.updates)
-                Task {
-                    await model.updater.check()
-                    if install { await model.updater.install() }
+                Task { await model.updater.check() }
+            case "switch":
+                // switch/best, switch/<n> for Claude (claude-swap's numbers); switch/codex/best,
+                // switch/codex/<n> for Codex (ccswap's).
+                if detail == "codex" {
+                    switchCodex(to: LinkValue.switchTarget(parts.dropFirst(2).first))
+                } else {
+                    switchClaude(to: LinkValue.switchTarget(detail))
                 }
             // settings/accounts/codex/console picks the tool and the tab; settings/codex is
             // what 1.7 called the Codex page.
@@ -73,9 +80,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     model.openSettings(detail.flatMap(SettingsSection.init(rawValue:)) ?? .general, anchor: rest.isEmpty ? nil : rest)
                 }
             case "timer":
-                if let minutes = parts.dropFirst().first.flatMap(Double.init), minutes > 0 { model.startTimer(minutes: minutes) }
+                // At most a day: "inf" or "1e20" would otherwise reach the clock.
+                if let minutes = parts.dropFirst().first.flatMap(LinkValue.timerMinutes) { model.startTimer(minutes: minutes) }
             default: break
             }
+        }
+    }
+
+    /// The same switch as the island's buttons, so it's announced in the notch. Without a known
+    /// account (the list not read yet), claude-swap picks or takes the number itself, and says
+    /// in the console if it can't.
+    private func switchClaude(to target: LinkValue.SwitchTarget?) {
+        switch target {
+        case .best:
+            if let best = model.bestAccount { model.switchAccount(best) } else { Task { await model.claudeSwap.switchToBest() } }
+        case .number(let number):
+            if let account = model.accounts.first(where: { $0.claudeSwapNumber == number }) {
+                model.switchAccount(account)
+            } else {
+                Task { await model.claudeSwap.switchTo(number) }
+            }
+        case nil: break
+        }
+    }
+
+    /// Codex goes through ccswap, the same way.
+    private func switchCodex(to target: LinkValue.SwitchTarget?) {
+        switch target {
+        case .best:
+            if let best = model.bestCodexAccount { model.switchAccount(best) } else { Task { await model.codexSwap.switchToBest() } }
+        case .number(let number):
+            if let account = model.codexAccounts.first(where: { $0.ccswapNumber == number }) {
+                model.switchAccount(account)
+            } else {
+                Task { _ = await model.codexSwap.switchTo(number) }
+            }
+        case nil: break
         }
     }
 }

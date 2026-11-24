@@ -122,6 +122,8 @@ public struct RateLimitWindow: Codable, Equatable, Identifiable, Sendable {
         switch windowMinutes {
         case 10_080: return "Weekly"
         case 1_440: return "Daily"
+        // A line without `window_minutes` reads as 0: say "Limit", not "0-hour".
+        case ...0: return "Limit"
         case let minutes where minutes % 60 == 0: return "\(minutes / 60)-hour"
         default: return "\(windowMinutes)-minute"
         }
