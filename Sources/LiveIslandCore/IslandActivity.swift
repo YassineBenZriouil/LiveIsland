@@ -14,6 +14,8 @@ public enum IslandActivity: Equatable, Sendable {
     case agentDone(AgentKind, project: String)
     case headphonesConnected(name: String, battery: Int?)
     case charging(percent: Int)
+    /// The Mac's battery (`device` nil) or a pair of headphones just got low.
+    case lowBattery(device: String?, percent: Int)
     case eventSoon(title: String, startsAt: Date)
     case cameraOn(app: String?)
     case microphoneOn(app: String)
@@ -28,6 +30,7 @@ public enum IslandActivity: Equatable, Sendable {
         case .agentNeedsYou: return 90
         case .accountLimit: return 88
         case .accountSwitched: return 87
+        case .lowBattery: return 86
         case .headphonesConnected: return 85
         case .charging: return 84
         case .agentDone: return 80

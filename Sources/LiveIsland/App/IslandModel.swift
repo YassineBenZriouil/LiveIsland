@@ -615,7 +615,7 @@ final class IslandModel: ObservableObject {
             accountsKind = account.hasPrefix("Codex") ? .codex : .claude
             return .accounts
         case .nowPlaying: return .media
-        case .call, .timer, .timerFinished, .headphonesConnected, .charging, .eventSoon, .cameraOn, .microphoneOn: return .activity
+        case .call, .timer, .timerFinished, .headphonesConnected, .charging, .lowBattery, .eventSoon, .cameraOn, .microphoneOn: return .activity
         case nil: return tabOrder.first(where: hasContent) ?? .activity
         }
     }
