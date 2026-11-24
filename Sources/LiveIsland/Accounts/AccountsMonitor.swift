@@ -89,6 +89,14 @@ final class AccountsMonitor {
         }
     }
 
+    /// The account a switch is on its way to (its `ClaudeAccount.id`), or nil once it's done:
+    /// the island and the menu bar show a spinner and hold other switches meanwhile.
+    func setSwitching(_ id: String?) {
+        var next = snapshot
+        next.switching = id
+        publish(next)
+    }
+
     /// Forgets an account LiveIsland saw: its row. The active account stays listed.
     func forget(_ account: ClaudeAccount) {
         queue.async { [weak self, worker] in

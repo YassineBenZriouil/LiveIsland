@@ -95,6 +95,14 @@ protocol SwapTool: ObservableObject {
     func clearConsole()
     func setting(_ key: String) -> ClaudeSwapSetting?
     func setSetting(_ key: String, _ value: String) async
+    /// Whether the sign-in being waited on can be called off, and calling it off.
+    var canCancelAdding: Bool { get }
+    func cancelAdding()
+}
+
+extension SwapTool {
+    var canCancelAdding: Bool { false }
+    func cancelAdding() {}
 }
 
 /// How a tool introduces itself on the page.
@@ -120,6 +128,7 @@ struct SwapToolInfo {
 }
 
 extension ClaudeSwapController: SwapTool {
+    var canCancelAdding: Bool { waitingForSignIn }
     var accountCount: Int? { accounts?.count }
     var activeName: String? { accounts?.first(where: \.isActive)?.name }
     var info: SwapToolInfo {
@@ -576,7 +585,10 @@ private struct AddAccountCard<Tool: SwapTool>: View {
                     .disabled(tool.newAccountName.trimmingCharacters(in: .whitespaces).isEmpty || tool.adding != nil)
             }
             if let adding = tool.adding {
-                HStack(spacing: 6) { ProgressView().controlSize(.small); Text(adding).font(.system(size: 11)).foregroundStyle(.secondary) }
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small); Text(adding).font(.system(size: 11)).foregroundStyle(.secondary)
+                    if tool.canCancelAdding { Button("Cancel") { tool.cancelAdding() }.buttonStyle(.link).font(.system(size: 11)) }
+                }
             }
             Text(tool.info.signInHelp).font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {

@@ -238,9 +238,15 @@ public enum ClaudeSwapCommand {
         case "menubar": return !arguments.contains { $0.hasSuffix("-service") }
         // LiveIsland runs the loop itself; a single tick ends.
         case "auto": return !arguments.contains("--once")
-        // Without a token on the command line it waits for one to be typed.
-        case "add-token": return arguments.count < 2 || arguments[1] == "-"
-        default: return false
+        // A token typed here would show in the console, in Copy and in `ps`: Terminal only.
+        case "add-token": return true
+        default: return carriesSecret(arguments)
         }
+    }
+
+    /// Whether a typed command holds a login token. Its text must never reach a console
+    /// entry, a note or the log, so the console refuses it without repeating it.
+    public static func carriesSecret(_ arguments: [String]) -> Bool {
+        arguments.contains("add-token") || arguments.contains { $0.hasPrefix("sk-ant-") }
     }
 }
