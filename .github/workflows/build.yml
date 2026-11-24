@@ -14,11 +14,11 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Test
-        run: ./scripts/test.sh
+        run: ./scripts/TEST.sh
 
       # The runner image includes CMake, which builds the media adapter.
       - name: Build app
-        run: ./scripts/build.sh
+        run: ./scripts/BUILD.sh
 
       - name: Package
         run: ditto -c -k --keepParent build/LiveIsland.app LiveIsland.zip

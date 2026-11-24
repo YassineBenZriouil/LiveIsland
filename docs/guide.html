@@ -123,7 +123,7 @@
       <div class="shot"><img src="https://raw.githubusercontent.com/charonova/LiveIsland/main/demo/console.png" alt="The console"></div>
 
       <h2 id="limits">Claude Code's limits</h2>
-      <p>Claude Code shares its limit percentages (the week, and 5 hours on plans that have that limit) only with its status line. In <b>Settings › AI Agents</b>, click <b>Add to My Status Line</b>. LiveIsland adds three lines to your status line script, after it reads its input, and keeps a copy of the original next to it (<code>*.liveisland-backup</code>). To add them yourself, they're in <a href="https://github.com/charonova/LiveIsland/blob/main/scripts/claude-statusline-snippet.sh"><code>scripts/claude-statusline-snippet.sh</code></a>. Without them, LiveIsland still counts Claude Code's tokens from its transcripts. Codex writes its limits into its sessions, so it needs nothing.</p>
+      <p>Claude Code shares its limit percentages (the week, and 5 hours on plans that have that limit) only with its status line. In <b>Settings › AI Agents</b>, click <b>Add to My Status Line</b>. LiveIsland adds three lines to your status line script, after it reads its input, and keeps a copy of the original next to it (<code>*.liveisland-backup</code>). To add them yourself, copy them from <a href="https://github.com/charonova/LiveIsland/blob/main/Sources/LiveIsland/Support/ClaudeStatusLine.swift"><code>ClaudeStatusLine.swift</code></a>. Without them, LiveIsland still counts Claude Code's tokens from its transcripts. Codex writes its limits into its sessions, so it needs nothing.</p>
 
       <h2 id="links">Links</h2>
       <p>Open these from Shortcuts, Raycast, Alfred or a terminal (<code>open liveisland://open</code>):</p>
@@ -158,8 +158,8 @@
       <h2 id="build">Build from source</h2>
       <p>You need the Xcode Command Line Tools and CMake (<code>brew install cmake</code>, for the media adapter):</p>
       <div class="term">git clone https://github.com/charonova/LiveIsland.git &amp;&amp; cd LiveIsland
-./scripts/install.sh   # builds, copies to ~/Applications and launches
-./scripts/test.sh      # runs the tests</div>
+./scripts/BUILD.sh     # builds build/LiveIsland.app; drag it to /Applications
+./scripts/TEST.sh      # runs the tests</div>
       <p>See <a href="https://github.com/charonova/LiveIsland/blob/main/AGENTS.md">AGENTS.md</a> for the code layout and the project's rules.</p>
     </main>
   </div>

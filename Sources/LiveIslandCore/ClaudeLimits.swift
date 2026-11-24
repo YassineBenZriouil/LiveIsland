@@ -2,7 +2,7 @@ import Foundation
 
 /// Claude Code's own usage percentages, as its status line receives them. Claude Code doesn't
 /// write them anywhere else, so LiveIsland reads a small file that the user's status line
-/// command can write (opt-in: `scripts/claude-statusline-snippet.sh`).
+/// command can write (opt-in: the lines `ClaudeStatusLine` adds when the person clicks the button).
 public struct UsageLimits: Equatable, Sendable {
     public var fiveHour: RateLimitWindow?
     public var sevenDay: RateLimitWindow?

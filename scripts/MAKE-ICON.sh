@@ -1,12 +1,12 @@
 #!/bin/bash
-# Regenerates Resources/AppIcon.icns and docs/icon.png from scripts/make-icon.swift.
+# Regenerates Resources/AppIcon.icns and docs/icon.png from scripts/MAKE-ICON.swift.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-swift scripts/make-icon.swift "$WORK/icon-1024.png" >/dev/null
+swift scripts/MAKE-ICON.swift "$WORK/icon-1024.png" >/dev/null
 ICONSET="$WORK/AppIcon.iconset"
 mkdir -p "$ICONSET" docs
 for size in 16 32 128 256 512; do

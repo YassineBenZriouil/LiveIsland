@@ -25,16 +25,16 @@ LiveIsland is a macOS app (Swift, SwiftUI + AppKit, no package dependencies) tha
 ## Build and verify
 
 ```bash
-./scripts/test.sh                 # all tests (adds the Testing plugin path on Command Line Tools)
-./scripts/build.sh                # → build/LiveIsland.app (builds the adapter with CMake once)
+./scripts/TEST.sh                 # all tests (adds the Testing plugin path on Command Line Tools)
+./scripts/BUILD.sh                # → build/LiveIsland.app (builds the adapter with CMake once)
 pkill -x LiveIsland; open build/LiveIsland.app
 open "liveisland://open"          # open the island without the mouse
 /usr/bin/log show --last 5m --predicate 'subsystem == "com.aissam.liveisland"'
-LIVEISLAND_REAL_DATA=1 ./scripts/test.sh -c release --filter RealData   # time a read of the real transcripts
-./scripts/release.sh              # → dist/LiveIsland.zip (Apple silicon + Intel, macOS 14+) and its SHA-256
+LIVEISLAND_REAL_DATA=1 ./scripts/TEST.sh -c release --filter RealData   # time a read of the real transcripts
+./scripts/RELEASE.sh              # → dist/LiveIsland.zip (Apple silicon + Intel, macOS 14+) and its SHA-256
 ```
 
-Releases: bump `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`, run `./scripts/release.sh`, and attach `dist/LiveIsland.zip` to a GitHub release under exactly that name (the README's install command downloads `releases/latest/download/LiveIsland.zip`). With `LIVEISLAND_IDENTITY` (a Developer ID) and `LIVEISLAND_NOTARY_PROFILE` set, the script also signs for distribution and notarizes. Check that both binaries say `macOS 14.0+`: CMake would otherwise stamp the adapter with the SDK's version, and older Macs couldn't load it.
+Releases: bump `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`, run `./scripts/RELEASE.sh`, and attach `dist/LiveIsland.zip` to a GitHub release under exactly that name (the README's install command downloads `releases/latest/download/LiveIsland.zip`). With `LIVEISLAND_IDENTITY` (a Developer ID) and `LIVEISLAND_NOTARY_PROFILE` set, the script also signs for distribution and notarizes. Check that both binaries say `macOS 14.0+`: CMake would otherwise stamp the adapter with the SDK's version, and older Macs couldn't load it.
 
 Measure CPU as CPU time over a minute, not `ps %cpu` (a decaying average that overstates bursts):
 

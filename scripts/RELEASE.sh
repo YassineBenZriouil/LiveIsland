@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
-UNIVERSAL=1 ./scripts/build.sh
+UNIVERSAL=1 ./scripts/BUILD.sh
 APP="build/LiveIsland.app"
 IDENTITY="${LIVEISLAND_IDENTITY:-}"
 

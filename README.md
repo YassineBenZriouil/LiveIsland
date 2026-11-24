@@ -142,7 +142,7 @@ The island's **Accounts** tab has the same switch, with each tool's **Auto** but
 
 ### Claude Code's limits
 
-Claude Code shares its limit percentages (the week, and 5 hours on plans that have that limit) only with its status line. In **Settings › AI Agents**, click **Add to My Status Line**. LiveIsland adds three lines to your status line script, after it reads its input, and keeps a copy of the original next to it (`*.liveisland-backup`). The lines save the percentages to `~/.claude/liveisland-limits.json`, which the island reads. To add them yourself, they're in [`scripts/claude-statusline-snippet.sh`](scripts/claude-statusline-snippet.sh). Without them, the island still counts Claude Code's tokens from its transcripts.
+Claude Code shares its limit percentages (the week, and 5 hours on plans that have that limit) only with its status line. In **Settings › AI Agents**, click **Add to My Status Line**. LiveIsland adds three lines to your status line script, after it reads its input, and keeps a copy of the original next to it (`*.liveisland-backup`). The lines save the percentages to `~/.claude/liveisland-limits.json`, which the island reads. To add them yourself, copy them from `Sources/LiveIsland/Support/ClaudeStatusLine.swift`. Without them, the island still counts Claude Code's tokens from its transcripts.
 
 ## Privacy
 
@@ -172,8 +172,8 @@ Measured on an M4 Pro with Claude Code and Codex running and Spotify playing: un
 
 ```bash
 git clone https://github.com/charonova/LiveIsland.git && cd LiveIsland
-./scripts/install.sh   # builds, copies to ~/Applications and launches
-./scripts/test.sh      # 105 tests
+./scripts/BUILD.sh     # builds build/LiveIsland.app; drag it to /Applications
+./scripts/TEST.sh      # runs the tests
 ```
 
 ## Links
