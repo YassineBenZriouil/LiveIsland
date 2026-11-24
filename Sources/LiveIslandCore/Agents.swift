@@ -30,12 +30,15 @@ public struct SessionHost: Equatable, Sendable {
     /// "/dev/ttys005"; nil when the agent runs without a terminal (an editor's chat panel).
     public var tty: String?
     public var folder: String
+    /// The tmux pane, when the agent runs inside tmux: then `tty` is a tmux client's terminal.
+    public var tmux: TmuxPane?
 
-    public init(bundleIdentifier: String, processID: Int32, tty: String?, folder: String) {
+    public init(bundleIdentifier: String, processID: Int32, tty: String?, folder: String, tmux: TmuxPane? = nil) {
         self.bundleIdentifier = bundleIdentifier
         self.processID = processID
         self.tty = tty
         self.folder = folder
+        self.tmux = tmux
     }
 
     /// The open editor folder that contains `path`, deepest first: the window to bring forward.

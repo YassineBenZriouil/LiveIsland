@@ -29,7 +29,15 @@ final class AgentMonitor {
 
     private let worker = Worker()
     private var stream: FSEventStreamRef?
+    /// The roots the stream watches; a root made later joins when the retry finds it.
+    private var watchedRoots: [String] = []
+    /// Looks for roots that didn't exist yet, every half minute, until both are watched.
+    private var rootRetry: Timer?
     private var tick: Timer?
+    private var tickInterval: TimeInterval = 0
+    private var running = false
+    /// Roots already queued for a rescan, so a burst of dropped events reads each once.
+    private var rescanning: Set<String> = []
 
     nonisolated static let claudeRoot = home.appendingPathComponent(".claude/projects")
     nonisolated static let codexRoot = home.appendingPathComponent(".codex/sessions")
@@ -45,21 +53,20 @@ final class AgentMonitor {
             let next = worker.snapshot(now: Date())
             DispatchQueue.main.async { self.publish(next) }
         }
+        running = true
         startWatching()
         // States also change with time alone (working → waiting → idle).
-        tick = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh(changed: []) }
-        }
+        schedule(every: AgentTick.busy)
     }
 
     func stop() {
+        running = false
         tick?.invalidate()
-        if let stream {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
-        }
-        stream = nil
+        tick = nil
+        tickInterval = 0
+        rootRetry?.invalidate()
+        rootRetry = nil
+        stopStream()
     }
 
     private func refresh(changed paths: [String]) {
@@ -70,23 +77,60 @@ final class AgentMonitor {
         }
     }
 
+    /// Looks through whole roots again: after FSEvents dropped events, or when a root first appears.
+    private func rescan(_ roots: Set<String>) {
+        let fresh = roots.subtracting(rescanning)
+        guard !fresh.isEmpty else { return }
+        rescanning.formUnion(fresh)
+        log.notice("Looking through \(fresh.count) session folders again")
+        worker.queue.async { [worker] in
+            for root in fresh { worker.rescan(root: root) }
+            let next = worker.snapshot(now: Date())
+            DispatchQueue.main.async {
+                self.rescanning.subtract(fresh)
+                self.publish(next)
+            }
+        }
+    }
+
     private func publish(_ next: Snapshot) {
+        // With nothing listed there's little to watch for, so look much less often.
+        schedule(every: AgentTick.interval(for: next.sessions))
         guard next != snapshot else { return }
         snapshot = next
         onUpdate?(next)
     }
 
+    private func schedule(every interval: TimeInterval) {
+        guard running, interval != tickInterval else { return }
+        tick?.invalidate()
+        tickInterval = interval
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh(changed: []) }
+        }
+        // Slow ticks don't need to be on the dot; letting them drift saves wake-ups.
+        timer.tolerance = interval >= AgentTick.quiet ? interval / 4 : 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        tick = timer
+    }
+
     private func startWatching() {
         let roots = [Self.claudeRoot, Self.codexRoot].map(\.path).filter { FileManager.default.fileExists(atPath: $0) }
+        watchedRoots = roots
+        watchForMissingRoots()
         guard !roots.isEmpty else { return }
         var context = FSEventStreamContext(
             version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
-        let callback: FSEventStreamCallback = { _, info, count, paths, _, _ in
-            guard let info else { return }
+        let callback: FSEventStreamCallback = { _, info, count, paths, flags, _ in
+            guard let info, count > 0 else { return }
             let monitor = Unmanaged<AgentMonitor>.fromOpaque(info).takeUnretainedValue()
-            let changed = (unsafeBitCast(paths, to: NSArray.self) as? [String] ?? []).filter { $0.hasSuffix(".jsonl") }
-            guard count > 0, !changed.isEmpty else { return }
-            MainActor.assumeIsolated { monitor.refresh(changed: changed) }
+            let list = unsafeBitCast(paths, to: NSArray.self) as? [String] ?? []
+            let flagList = (0..<count).map { UInt32(flags[$0]) }
+            MainActor.assumeIsolated {
+                let batch = WatchEvents.batch(paths: list, flags: flagList, roots: monitor.watchedRoots)
+                if !batch.rescan.isEmpty { monitor.rescan(batch.rescan) }
+                if !batch.changed.isEmpty { monitor.refresh(changed: batch.changed) }
+            }
         }
         let flags = UInt32(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer)
         guard let stream = FSEventStreamCreate(nil, callback, &context, roots as CFArray,
@@ -94,6 +138,41 @@ final class AgentMonitor {
         FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)
         self.stream = stream
+    }
+
+    private func stopStream() {
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+        stream = nil
+    }
+
+    /// Claude Code or Codex may be installed after LiveIsland starts. Watching the home folder
+    /// for that would wake on every file saved there, so check for the folder now and then:
+    /// one `stat` each half minute, and none once both are watched.
+    private func watchForMissingRoots() {
+        rootRetry?.invalidate()
+        rootRetry = nil
+        guard watchedRoots.count < 2 else { return }
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkForNewRoots() }
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        rootRetry = timer
+    }
+
+    private func checkForNewRoots() {
+        let roots = [Self.claudeRoot, Self.codexRoot].map(\.path).filter { FileManager.default.fileExists(atPath: $0) }
+        let added = Set(roots).subtracting(watchedRoots)
+        guard !added.isEmpty else { return }
+        log.notice("Started watching \(added.count) new session folders")
+        stopStream()
+        startWatching()
+        // Sessions may have been written before the stream started.
+        rescan(added)
     }
 }
 
@@ -147,10 +226,30 @@ private final class Worker: @unchecked Sendable {
             }
             if path.hasPrefix(AgentMonitor.claudeRoot.path), ledgerReady {
                 ledger.ingest(URL(fileURLWithPath: path))
+                summaryCache.invalidate()
             }
             update(path, modified: modified)
         }
     }
+
+    /// Reads a root's recent files again, for when file events were lost or the root is new.
+    /// The ledger reads only what each file gained, so files it already knows cost a `stat`.
+    func rescan(root: String) {
+        let now = Date()
+        let url = URL(fileURLWithPath: root, isDirectory: true)
+        let isClaude = root == AgentMonitor.claudeRoot.path
+        let files = Self.files(under: url, modifiedSince: now.addingTimeInterval(isClaude ? -UsageLedger.horizon : -Self.recent))
+        if isClaude, ledgerReady {
+            ledger.ingest(files.map(\.url), now: now, concurrency: 4)
+            summaryCache.invalidate()
+        }
+        for file in files where now.timeIntervalSince(file.modified) < Self.recent {
+            update(file.url.path, modified: file.modified)
+        }
+    }
+
+    /// Rebuilt only when records arrive or a window or day ends: the island looks every few seconds.
+    private var summaryCache = UsageSummaryCache()
 
     private var hosts: (claude: [String: SessionHost], codex: [String: SessionHost]) = ([:], [:])
     private var lastHostScan = Date.distantPast
@@ -184,7 +283,8 @@ private final class Worker: @unchecked Sendable {
     func snapshot(now: Date) -> AgentMonitor.Snapshot {
         saveLedgersIfNeeded(now: now)
         sessions = sessions.filter { now.timeIntervalSince($0.value.modified) < Self.recent }
-        refreshHosts(now: now)
+        // The process table matters only to place a session; with none, skip reading it.
+        if !sessions.isEmpty { refreshHosts(now: now) }
         var list: [AgentSession] = []
         for (path, session) in sessions {
             switch session.kind {
@@ -216,11 +316,12 @@ private final class Worker: @unchecked Sendable {
         }
         if now.timeIntervalSince(lastPrune) > 600 {
             ledger.prune(now: now)
+            summaryCache.invalidate()
             lastPrune = now
         }
         return AgentMonitor.Snapshot(
             sessions: list,
-            usage: ledgerReady ? ledger.summary(now: now) : nil,
+            usage: ledgerReady ? summaryCache.summary(now: now) { ledger.summary(now: now) } : nil,
             claudeLimit: ledger.currentLimit(at: now),
             codexLimits: codexLimits,
             claudeLimits: readClaudeLimits()?.current(at: now),
