@@ -157,6 +157,14 @@ struct CompactIsland: View {
         }
     }
 
+    /// The call link of the event about to start, for its Join button.
+    private var meetingLink: MeetingLink? {
+        guard case .eventSoon(let title, let startsAt) = activity,
+              let event = model.upcomingEvent(at: Date()), event.title == title, event.start == startsAt
+        else { return nil }
+        return model.meetingLink(for: event)
+    }
+
     /// Changes in detail (a clock ticking) keep the identity; a different activity animates in.
     static func identity(of activity: IslandActivity) -> String {
         switch activity {
@@ -168,6 +176,9 @@ struct CompactIsland: View {
         case .accountLimit(let account, _): return "limit-\(account)"
         case .accountSwitched(let to): return "switched-\(to)"
         case .agentWorking(let kind, let project, _): return "working-\(kind)-\(project)"
+        case .limitReset(let kind, _): return "back-\(kind)"
+        case .limitWaiting(let kind, let account, _): return "wait-\(kind)-\(account)"
+        case .limitForecast(let kind, _, _): return "forecast-\(kind)"
         case .headphonesConnected: return "headphones"
         case .charging: return "charging"
         case .lowBattery(let device, _): return "low-\(device ?? "mac")"
@@ -196,6 +207,28 @@ struct CompactIsland: View {
                 .foregroundStyle(.white, .orange)
         case .agentWorking(let kind, _, _):
             AgentGlyph(kind: kind, size: 15, spinning: true)
+        case .limitReset(let kind, _):
+            AgentGlyph(kind: kind, size: 15)
+        case .limitWaiting(let kind, _, _):
+            ZStack(alignment: .bottomTrailing) {
+                AgentGlyph(kind: kind, size: 15)
+                Image(systemName: "hourglass.circle.fill").font(.system(size: 9, weight: .bold))
+                    .symbolRenderingMode(.palette).foregroundStyle(.black, .orange)
+            }
+        case .limitForecast(let kind, _, _):
+            ZStack(alignment: .bottomTrailing) {
+                AgentGlyph(kind: kind, size: 15)
+                Image(systemName: "gauge.with.needle.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(.orange)
+            }
+        case .eventSoon(_, let startsAt) where meetingLink != nil:
+            // The right wing holds Join: the countdown moves here, beside the icon.
+            HStack(spacing: 5) {
+                Image(systemName: "calendar").foregroundStyle(.red)
+                TimelineView(.periodic(from: .now, by: 15)) { context in
+                    Text(startsAt > context.date ? Format.span(startsAt.timeIntervalSince(context.date)) : "Now")
+                        .foregroundStyle(.red).monospacedDigit().minimumScaleFactor(0.7)
+                }
+            }
         case .headphonesConnected(let name, _):
             Image(systemName: HeadphoneSymbol.name(for: name)).foregroundStyle(.white)
         case .charging:
@@ -242,6 +275,31 @@ struct CompactIsland: View {
         case .agentWorking(_, _, let since):
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(Format.span(context.date.timeIntervalSince(since))).foregroundStyle(.white.opacity(0.8)).monospacedDigit()
+            }
+        case .limitReset:
+            Text("Back").foregroundStyle(.green)
+                .accessibilityLabel("Its limit reset")
+        case .limitWaiting(_, _, let resetsAt):
+            // Minutes are all a wait of hours needs; the clock bumps the island every 30 s anyway.
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(Format.span(max(0, resetsAt.timeIntervalSince(context.date))))
+                    .foregroundStyle(.orange).monospacedDigit().minimumScaleFactor(0.7)
+            }
+            .help("Back \(TaskTime.short(resetsAt))")
+        case .limitForecast(_, _, let runsOutAt):
+            Text("Out \(TaskTime.short(runsOutAt))").foregroundStyle(.orange).monospacedDigit().minimumScaleFactor(0.7)
+                .accessibilityLabel("At this pace, runs out at \(TaskTime.short(runsOutAt))")
+        case .eventSoon where meetingLink != nil:
+            if let link = meetingLink {
+                Button { model.joinMeeting(link.url) } label: {
+                    Text("Join").font(.system(size: 11, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 10).frame(height: 20)
+                        .background(Capsule().fill(.green))
+                        .foregroundStyle(.white)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(PressableStyle())
+                .accessibilityLabel("Join on \(link.service.name)")
             }
         case .headphonesConnected(_, let battery):
             if let battery {

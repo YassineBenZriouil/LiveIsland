@@ -888,6 +888,8 @@ private struct UsagePanel: View {
 private struct ProviderTitle: View {
     let kind: AgentKind
     let detail: String?
+    /// When the account in use runs out at this pace, before its limit resets.
+    var runsOut: Date? = nil
 
     var body: some View {
         HStack(spacing: 6) {
@@ -895,6 +897,10 @@ private struct ProviderTitle: View {
                 .frame(width: 14, height: 14)
             Text(kind.displayName).font(.system(size: 11, weight: .bold))
             Spacer(minLength: 0)
+            if let runsOut {
+                Text("Runs out \(TaskTime.short(runsOut))").font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
+                    .lineLimit(1).fixedSize().help("At this pace, its limit runs out before it resets")
+            }
             if let detail { Text(detail).font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.45)).lineLimit(1).privacySensitive() }
         }
     }
@@ -926,7 +932,7 @@ private struct ClaudeUsage: View {
     var body: some View {
         let usage = model.agents.usage
         VStack(alignment: .leading, spacing: 8) {
-            ProviderTitle(kind: .claude, detail: detail(usage))
+            ProviderTitle(kind: .claude, detail: detail(usage), runsOut: model.limitForecast(.claude))
             if let windows = activeWindows {
                 RingGauges(windows: windows, tint: AgentGlyph(kind: .claude).color)
             } else if let limit = model.agents.claudeLimit {
@@ -979,7 +985,8 @@ private struct CodexUsage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ProviderTitle(kind: .codex, detail: model.codexAccounts.count > 1
-                          ? model.accountsState.activeCodex?.identity.email.components(separatedBy: "@").first : nil)
+                          ? model.accountsState.activeCodex?.identity.email.components(separatedBy: "@").first : nil,
+                          runsOut: model.limitForecast(.codex))
             if let windows = activeWindows {
                 RingGauges(windows: windows, tint: AgentGlyph(kind: .codex).color)
             } else {
@@ -1202,11 +1209,34 @@ private struct CalendarTile: View {
                                 }
                                 .font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
                             }
+                            Spacer(minLength: 0)
+                            JoinButton(event: event)
                         }
                         .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
+        }
+    }
+}
+
+/// Join, from shortly before a call starts until it ends: earlier, the tile stays calm.
+private struct JoinButton: View {
+    @EnvironmentObject private var model: IslandModel
+    let event: CalendarProvider.Event
+
+    var body: some View {
+        let now = Date()
+        if let link = model.meetingLink(for: event), event.end > now, event.start.timeIntervalSince(now) < ClockTicks.eventLead {
+            Button { model.joinMeeting(link.url) } label: {
+                Text("Join").font(.system(size: 10, weight: .bold, design: .rounded))
+                    .padding(.horizontal, 8).frame(height: 18)
+                    .background(Capsule().fill(.green))
+                    .foregroundStyle(.white)
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(PressableStyle())
+            .help("Join on \(link.service.name)")
         }
     }
 }

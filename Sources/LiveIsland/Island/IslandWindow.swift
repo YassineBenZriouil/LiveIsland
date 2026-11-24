@@ -380,6 +380,7 @@ final class IslandController {
             && !(model.primary?.showsOverFullScreen ?? false)
         guard hide != hidden else { return }
         hidden = hide
+        model.setHiddenOverFullScreen(hide)
         if hide {
             panel.ignoresMouseEvents = true
             model.setHovering(false)
