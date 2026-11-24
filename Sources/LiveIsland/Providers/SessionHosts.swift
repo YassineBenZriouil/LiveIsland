@@ -142,7 +142,10 @@ enum SessionHosts {
 
     /// Only `TMUX` and `TMUX_PANE` are kept from the agent's environment: the rest can hold secrets.
     private static func tmuxVariables(of pid: pid_t) -> [String: String]? {
-        processArguments(of: pid)?.environment.filter { $0.key == "TMUX" || $0.key == "TMUX_PANE" }
+        guard let process = processArguments(of: pid) else { return nil }
+        var variables: [String: String] = [:]
+        for key in ["TMUX", "TMUX_PANE"] { variables[key] = process.value(of: key) }
+        return variables
     }
 
     /// Every process, with its parent and terminal; unlike per-process calls this also covers

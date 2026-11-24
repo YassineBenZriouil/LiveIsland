@@ -109,8 +109,8 @@ struct ProcessArgumentsTests {
                               environment: ["TMUX=/private/tmp/tmux-501/default,4242,0", "TMUX_PANE=%3", "TERM=screen-256color"])
         let parsed = ProcessArguments.parse(buffer)
         #expect(parsed?.arguments == ["claude", "--resume"])
-        #expect(parsed?.environment["TMUX_PANE"] == "%3")
-        #expect(parsed?.environment["TERM"] == "screen-256color")
+        #expect(parsed?.value(of: "TMUX_PANE") == "%3")
+        #expect(parsed?.value(of: "TERM") == "screen-256color")
     }
 
     @Test func survivesATruncatedBuffer() {

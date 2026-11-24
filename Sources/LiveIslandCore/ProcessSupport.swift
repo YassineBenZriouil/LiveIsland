@@ -79,6 +79,9 @@ public struct ProcessArguments: Equatable, Sendable {
         return ProcessArguments(arguments: arguments, environment: environment)
     }
 
+    /// The same, from the raw bytes `sysctl` filled in.
+    public static func parse(_ bytes: [UInt8]) -> ProcessArguments? { parse(Data(bytes)) }
+
     public func value(of key: String) -> String? {
         environment.lazy.first { $0.hasPrefix(key + "=") }.map { String($0.dropFirst(key.count + 1)) }
     }

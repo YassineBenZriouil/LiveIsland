@@ -75,43 +75,6 @@ public enum WatchEvents {
     }
 }
 
-/// A process's arguments and environment as `KERN_PROCARGS2` returns them: argc, the
-/// executable path, padding, argv, then the environment.
-public struct ProcessArguments: Equatable {
-    public var arguments: [String]
-    public var environment: [String: String]
-
-    public init(arguments: [String], environment: [String: String]) {
-        self.arguments = arguments
-        self.environment = environment
-    }
-
-    public static func parse(_ buffer: [UInt8]) -> ProcessArguments? {
-        let countSize = MemoryLayout<Int32>.size
-        guard buffer.count > countSize else { return nil }
-        let argc = buffer.withUnsafeBytes { Int($0.loadUnaligned(as: Int32.self)) }
-        var index = countSize
-        while index < buffer.count, buffer[index] != 0 { index += 1 }  // Executable path.
-        while index < buffer.count, buffer[index] == 0 { index += 1 }  // Padding.
-        func next() -> String? {
-            guard index < buffer.count else { return nil }
-            let start = index
-            while index < buffer.count, buffer[index] != 0 { index += 1 }
-            let text = String(decoding: buffer[start..<index], as: UTF8.self)
-            index += 1
-            return text
-        }
-        var arguments: [String] = []
-        while arguments.count < argc, let argument = next() { arguments.append(argument) }
-        var environment: [String: String] = [:]
-        while let entry = next(), !entry.isEmpty {
-            guard let equals = entry.firstIndex(of: "=") else { continue }
-            environment[String(entry[..<equals])] = String(entry[entry.index(after: equals)...])
-        }
-        return ProcessArguments(arguments: arguments, environment: environment)
-    }
-}
-
 /// The tmux pane an agent runs in, from its `TMUX` and `TMUX_PANE` variables, so a tap can find
 /// the terminal showing it and select it there.
 public struct TmuxPane: Equatable, Sendable {
