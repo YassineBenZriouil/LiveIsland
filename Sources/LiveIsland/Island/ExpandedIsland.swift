@@ -868,15 +868,44 @@ private struct StateChip: View {
     }
 }
 
-/// Limits as rings: Claude Code on top, Codex below.
+/// Which side of the usage panel is up. Kept for the session only: limits come back first
+/// after a relaunch, since they're what most people look for.
+private final class UsagePaneChoice: ObservableObject {
+    static let shared = UsagePaneChoice()
+    @Published var showsCost = false
+}
+
+/// Limits as rings (Claude Code on top, Codex below), or turned over: estimated cost and the
+/// last 30 days. The window never resizes, so both sides share the same box and scroll.
 private struct UsagePanel: View {
     @EnvironmentObject private var model: IslandModel
+    @ObservedObject private var pane = UsagePaneChoice.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if model.showClaude { ClaudeUsage() }
-            if model.showClaude && model.showCodex { Divider().overlay(.white.opacity(0.08)) }
-            if model.showCodex { CodexUsage() }
+        VStack(alignment: .leading, spacing: 8) {
+            if !model.showClaude && !model.showCodex {
+                UsageOff()
+            } else {
+                ScrollView {
+                    Group {
+                        if pane.showsCost {
+                            CostPane()
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) {
+                                if model.showClaude { ClaudeUsage() }
+                                if model.showClaude && model.showCodex { Divider().overlay(.white.opacity(0.08)) }
+                                if model.showCodex { CodexUsage() }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+                }
+                .scrollIndicators(.never)
+                UsageFlip(showsCost: pane.showsCost) {
+                    withAnimation(.easeInOut(duration: 0.2)) { pane.showsCost.toggle() }
+                }
+            }
         }
         .padding(12)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -986,6 +1015,271 @@ private struct CodexUsage: View {
                 Text("No recent sessions").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
             }
         }
+    }
+}
+
+/// Both agents are turned off: say where to turn them on instead of showing an empty box.
+private struct UsageOff: View {
+    @EnvironmentObject private var model: IslandModel
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "gauge.with.dots.needle.33percent").font(.system(size: 20)).foregroundStyle(.white.opacity(0.4))
+            Text("Limits are off").font(.system(size: 12, weight: .semibold))
+            Text("Turn on Claude Code or Codex to see their limits and cost here.")
+                .font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button { model.openSettings(.agents) } label: {
+                Text("Open AI Agents Settings").font(.system(size: 10, weight: .semibold)).foregroundStyle(AgentGlyph(kind: .claude).color)
+            }
+            .buttonStyle(PressableStyle())
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The panel's last line: today's total, which turns the panel over to cost and history.
+private struct UsageFlip: View {
+    @EnvironmentObject private var model: IslandModel
+    let showsCost: Bool
+    let flip: () -> Void
+
+    private var today: String? {
+        if model.showClaude, let usage = model.agents.usage {
+            return "\(Format.cost(usage.todayCost)) today"
+        }
+        if model.showCodex, let tokens = model.agents.codexTodayTokens {
+            return "\(Format.tokens(tokens)) tokens today"
+        }
+        return nil
+    }
+
+    var body: some View {
+        Button(action: flip) {
+            HStack(spacing: 4) {
+                if showsCost {
+                    Image(systemName: "chevron.left").font(.system(size: 8, weight: .bold))
+                    Text("Limits")
+                    Spacer(minLength: 0)
+                } else {
+                    Text(today ?? "Cost and history").monospacedDigit()
+                    Spacer(minLength: 0)
+                    Text("History")
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                }
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.6))
+            .frame(height: 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
+        .help(showsCost ? "Show the usage limits" : "Show estimated cost and the last 30 days")
+    }
+}
+
+/// Estimated cost and token use: today, this window, the last 30 days and where they went.
+private struct CostPane: View {
+    @EnvironmentObject private var model: IslandModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if model.showClaude { ClaudeCost() }
+            if model.showClaude && model.showCodex { Divider().overlay(.white.opacity(0.08)) }
+            if model.showCodex { CodexCost() }
+        }
+    }
+}
+
+private struct ClaudeCost: View {
+    @EnvironmentObject private var model: IslandModel
+
+    var body: some View {
+        let tint = AgentGlyph(kind: .claude).color
+        VStack(alignment: .leading, spacing: 8) {
+            ProviderTitle(kind: .claude, detail: "Estimated")
+                .help("What the same use would cost at API list prices. A subscription isn't billed per token.")
+            if let usage = model.agents.usage {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(Format.cost(usage.todayCost)).font(.system(size: 18, weight: .bold, design: .rounded)).monospacedDigit()
+                        Text("today · \(usage.todayRequests) replies").font(.system(size: 9)).foregroundStyle(.white.opacity(0.45))
+                    }
+                    Spacer(minLength: 4)
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(usage.windowStart == nil ? "–" : Format.cost(usage.windowCost))
+                            .font(.system(size: 13, weight: .bold, design: .rounded)).monospacedDigit()
+                        Text("this window").font(.system(size: 9)).foregroundStyle(.white.opacity(0.45))
+                    }
+                }
+                TokenKinds(counts: usage.today)
+                let report = UsageReport(history: model.agents.usageHistory)
+                HistoryLine(title: "30 days", total: report.trendIsCost ? Format.cost(report.cost) : "\(Format.tokens(report.tokens)) tokens",
+                            levels: report.trend, tint: tint, empty: report.isEmpty)
+                if !report.isEmpty {
+                    Breakdown(title: "Models", slices: report.models, byCost: report.trendIsCost, tint: tint)
+                    Breakdown(title: "Projects", slices: report.projects, byCost: report.trendIsCost, tint: tint).privacySensitive()
+                }
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Counting…").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                }
+            }
+        }
+    }
+}
+
+private struct CodexCost: View {
+    @EnvironmentObject private var model: IslandModel
+
+    var body: some View {
+        let history = model.agents.codexHistory
+        let total = history.reduce(0) { $0 + $1.tokens }
+        VStack(alignment: .leading, spacing: 8) {
+            ProviderTitle(kind: .codex, detail: "Tokens")
+            if let today = model.agents.codexTodayTokens {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(Format.tokens(today)).font(.system(size: 18, weight: .bold, design: .rounded)).monospacedDigit()
+                    Text("tokens today").font(.system(size: 9)).foregroundStyle(.white.opacity(0.45))
+                }
+                HistoryLine(title: "30 days", total: "\(Format.tokens(total)) tokens", levels: UsageReport.levels(codex: history),
+                            tint: AgentGlyph(kind: .codex).color, empty: total == 0)
+            } else {
+                Text("No recent sessions").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+            }
+        }
+    }
+}
+
+/// Today's tokens by kind: cache reads are usually most of them but cost the least, so a
+/// single sum would say little.
+private struct TokenKinds: View {
+    let counts: TokenCounts
+
+    var body: some View {
+        let kinds = [("In", counts.input), ("Out", counts.output), ("Cache write", counts.cacheWrite), ("Cache read", counts.cacheRead)]
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(0..<2, id: \.self) { row in
+                HStack(spacing: 8) {
+                    ForEach(kinds[(row * 2)..<(row * 2 + 2)], id: \.0) { kind in
+                        HStack(spacing: 4) {
+                            Text(kind.0).foregroundStyle(.white.opacity(0.45))
+                            Spacer(minLength: 2)
+                            Text(Format.tokens(kind.1)).monospacedDigit()
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+        }
+        .font(.system(size: 9, weight: .medium))
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// "30 days  $84" over a day-by-day bar sparkline.
+private struct HistoryLine: View {
+    let title: String
+    let total: String
+    let levels: [Double]
+    let tint: Color
+    let empty: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).foregroundStyle(.white.opacity(0.45))
+                Spacer(minLength: 4)
+                Text(total).monospacedDigit()
+            }
+            .font(.system(size: 9, weight: .semibold))
+            if empty {
+                // Old transcripts are never read in full, so history starts when LiveIsland does.
+                Text("History builds up from the day LiveIsland started counting.")
+                    .font(.system(size: 9)).foregroundStyle(.white.opacity(0.4)).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Sparkline(levels: levels, tint: tint).frame(height: 24)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title): \(total)")
+    }
+}
+
+/// A bar per day, today brightest. Plain shapes, drawn once per change: nothing moves.
+private struct Sparkline: View {
+    let levels: [Double]
+    let tint: Color
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Rectangle().fill(.white.opacity(0.08)).frame(height: 0.5)
+            DayBars(levels: levels, only: nil).fill(tint.opacity(0.45))
+            DayBars(levels: levels, only: levels.count - 1).fill(tint)
+        }
+    }
+}
+
+/// The bars as one path: a day with any use is at least 1.5 points tall, so it shows.
+private struct DayBars: Shape {
+    let levels: [Double]
+    /// Only this day's bar (today, drawn on top), or every bar but the last when nil.
+    let only: Int?
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard !levels.isEmpty else { return path }
+        let slot = rect.width / CGFloat(levels.count)
+        let gap = min(1.5, slot * 0.3)
+        for (index, level) in levels.enumerated() where level > 0 {
+            if let only { guard index == only else { continue } } else if index == levels.count - 1 { continue }
+            let height = max(1.5, rect.height * CGFloat(min(level, 1)))
+            let bar = CGRect(x: rect.minX + CGFloat(index) * slot, y: rect.maxY - height, width: max(0.5, slot - gap), height: height)
+            path.addRoundedRect(in: bar, cornerSize: CGSize(width: 0.75, height: 0.75))
+        }
+        return path
+    }
+}
+
+/// Where the last 30 days went: a line per model or project, with its share as a thin bar.
+private struct Breakdown: View {
+    let title: String
+    let slices: [UsageReport.Slice]
+    let byCost: Bool
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.system(size: 9, weight: .semibold)).foregroundStyle(.white.opacity(0.45))
+            ForEach(slices) { slice in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(slice.name).lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Text(byCost ? Format.cost(slice.cost) : Format.tokens(slice.tokens)).monospacedDigit()
+                    }
+                    .font(.system(size: 10, weight: .medium))
+                    ShareBar(share: slice.share, color: tint.opacity(slice.name == "Other" ? 0.4 : 0.85))
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+}
+
+/// A thin track filled to `share`, as a shape so it needs no layout pass of its own.
+private struct ShareBar: View {
+    let share: Double
+    let color: Color
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule().fill(.white.opacity(0.08))
+            Capsule().fill(color).scaleEffect(x: CGFloat(min(max(share, 0.01), 1)), y: 1, anchor: .leading)
+        }
+        .frame(height: 2.5)
     }
 }
 
