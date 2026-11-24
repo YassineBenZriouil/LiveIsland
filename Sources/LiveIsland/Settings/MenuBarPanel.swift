@@ -195,21 +195,26 @@ private struct TimerRow: View {
     }
 }
 
-/// The Claude account in use, its limits, and a menu to switch.
+/// The account in use (Claude's, or Codex's for someone who only uses Codex), its limits,
+/// and a menu to switch either.
 private struct AccountStrip: View {
     @EnvironmentObject private var model: IslandModel
 
     var body: some View {
         HStack(spacing: 10) {
-            if let active = model.accountsState.active {
+            if let active = model.accountsState.active ?? model.accountsState.activeCodex {
                 AccountAvatar(identity: active.identity, size: 30)
+                    .overlay(alignment: .bottomTrailing) {
+                        AgentGlyph(kind: active.kind, size: 6).frame(width: 12, height: 12)
+                            .background(Circle().fill(Color(nsColor: .windowBackgroundColor))).offset(x: 3, y: 3)
+                    }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(active.identity.displayName).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                     Text(limits(active)).font(.system(size: 10)).foregroundStyle(active.isAtLimit ? Color.orange : .secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 let others = model.accounts.filter { !$0.isActive && $0.switcher != nil && !$0.needsLogin }
-                let codex = model.codexAccounts.filter { !$0.isActive && $0.switcher != nil }
+                let codex = model.codexAccounts.filter { !$0.isActive && $0.switcher != nil && !$0.needsLogin }
                 if model.accountsState.switching != nil {
                     ProgressView().controlSize(.small)
                 } else if !others.isEmpty || !codex.isEmpty {
@@ -231,10 +236,15 @@ private struct AccountStrip: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
+                } else if model.hasNoSwitcher {
+                    Button("Set Up Switching") { model.openSettings(.accounts) }
+                        .controlSize(.small)
+                        .help("claude-swap and ccswap switch accounts, by hand or before one runs out")
                 }
             } else {
                 IconBadge(symbol: "person.2.fill", tint: .indigo, size: 30)
-                Text("Claude accounts appear once Claude Code is used").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("Accounts appear once Claude Code or Codex is used").font(.system(size: 11)).foregroundStyle(.secondary)
+                    .lineLimit(2)
                 Spacer(minLength: 0)
             }
         }

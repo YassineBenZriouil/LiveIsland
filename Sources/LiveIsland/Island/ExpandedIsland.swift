@@ -36,6 +36,9 @@ struct ExpandedIsland: View {
                 case .accounts: AccountsPage().transition(.blurReplace)
                 }
             }
+            .overlay(alignment: .top) {
+                if model.showsWelcome { WelcomeHint(layout: layout).transition(.opacity) }
+            }
             .padding(.horizontal, 18)
             .padding(.top, 10)
             .padding(.bottom, 18)
@@ -57,7 +60,7 @@ private struct TabBar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(model.tabOrder) { tab in
+            ForEach(model.visibleTabs) { tab in
                 let selected = model.tab == tab
                 Button {
                     withAnimation(tabSpring) { model.tab = tab }
@@ -704,6 +707,15 @@ private struct AgentsPage: View {
                         Text("No agents running").font(.system(size: 13, weight: .semibold))
                         Text("Claude Code and Codex sessions show up here as they work.")
                             .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).multilineTextAlignment(.center)
+                        // Claude's limits in percent need the status line: the way there.
+                        if model.showClaude, model.agents.claudeLimits == nil {
+                            Button { model.openSettings(.agents) } label: {
+                                Label("Show Claude's limits in %", systemImage: "gauge.with.dots.needle.50percent")
+                                    .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(AgentGlyph(kind: .claude).color)
+                            }
+                            .buttonStyle(PressableStyle())
+                            .help("Set up Claude Code's status line to pass its limits on, in Settings › AI Agents")
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -877,6 +889,16 @@ private struct UsagePanel: View {
             if model.showClaude { ClaudeUsage() }
             if model.showClaude && model.showCodex { Divider().overlay(.white.opacity(0.08)) }
             if model.showCodex { CodexUsage() }
+            if !model.showClaude && !model.showCodex {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No agents followed").font(.system(size: 11, weight: .semibold))
+                    Text("Claude Code and Codex are both off.").font(.system(size: 10)).foregroundStyle(.white.opacity(0.5))
+                    Button { model.openSettings(.agents) } label: {
+                        Text("Turn one on").font(.system(size: 10, weight: .semibold)).foregroundStyle(AgentGlyph(kind: .claude).color)
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+            }
         }
         .padding(12)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -983,7 +1005,11 @@ private struct CodexUsage: View {
             if let windows = activeWindows {
                 RingGauges(windows: windows, tint: AgentGlyph(kind: .codex).color)
             } else {
-                Text("No recent sessions").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("No recent sessions").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                    Text("Run codex in a terminal: its limits show here after its first reply.")
+                        .font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

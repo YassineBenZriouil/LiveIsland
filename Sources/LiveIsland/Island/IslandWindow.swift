@@ -303,7 +303,8 @@ final class IslandController {
             return event
         }) { watch.monitors.append(monitor) }
         if !model.isHovering {
-            let timeout = Timer(timeInterval: Self.unattendedTimeout, repeats: false) { [weak self] _ in
+            // The first run's hint gets time to be read.
+            let timeout = Timer(timeInterval: model.showsWelcome ? 15 : Self.unattendedTimeout, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, !self.model.isHovering else { return }
                     self.model.collapse()

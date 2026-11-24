@@ -113,6 +113,16 @@ final class IslandModel: ObservableObject {
     @Published var tabOrder: [IslandTab] {
         didSet { defaults.set(tabOrder.map(\.rawValue), forKey: Key.tabOrder) }
     }
+    /// Tabs turned off in Settings › Island: they leave the open island altogether.
+    @Published private(set) var hiddenTabs: Set<IslandTab> {
+        didSet { defaults.set(hiddenTabs.map(\.rawValue).sorted(), forKey: Key.hiddenTabs) }
+    }
+    /// The island's tabs as it shows them: in the picked order, without the hidden ones.
+    var visibleTabs: [IslandTab] {
+        Ordering.shown(tabOrder, hidden: Set(hiddenTabs.map(\.rawValue)), name: \.rawValue)
+    }
+    /// The first launch opens the island once with a hint, since the idle island is the notch.
+    @Published private(set) var showsWelcome = false
     /// Bars that move with the real sound, instead of the animated symbol.
     @Published var liveWaveform: Bool {
         didSet {
@@ -177,6 +187,9 @@ final class IslandModel: ObservableObject {
     private var artworkCache: [String: ArtworkLook] = [:]
 
     init() {
+        // Nothing saved at all: LiveIsland has never run here (read before anything is written).
+        isFirstRun = defaults.object(forKey: Key.welcomed) == nil
+            && (defaults.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?.isEmpty ?? true)
         defaults.register(defaults: [Key.media: true, Key.agents: true, Key.calls: true, Key.devices: true,
                                      Key.calendar: true, Key.claude: true, Key.codex: true, Key.hover: true,
                                      Key.hoverDelay: 0.12, Key.glow: true, Key.sounds: false, Key.players: true,
@@ -196,6 +209,7 @@ final class IslandModel: ObservableObject {
         liveWaveform = defaults.bool(forKey: Key.waveform)
         checkForUpdates = defaults.bool(forKey: Key.updates)
         tabOrder = Ordering.restore(defaults.stringArray(forKey: Key.tabOrder) ?? [], all: IslandTab.allCases, name: \.rawValue)
+        hiddenTabs = Set((defaults.stringArray(forKey: Key.hiddenTabs) ?? []).compactMap(IslandTab.init(rawValue:)))
         controlPlayers = defaults.bool(forKey: Key.players)
         islandDisplay = DisplayChoice(saved: defaults.string(forKey: Key.display))
         islandPlacement = IslandPlacement(saved: defaults.string(forKey: Key.placement))
@@ -256,6 +270,29 @@ final class IslandModel: ObservableObject {
         screen.onChange = { [weak self] in self?.receivePresence($0) }
         screen.onWake = { [weak self] in self?.didWake() }
         screen.start()
+        if isFirstRun { welcome() }
+    }
+
+    // MARK: - First run
+
+    private let isFirstRun: Bool
+
+    /// On a Mac with a notch the idle island is the notch itself, so nothing would show that
+    /// LiveIsland started: open it once, a moment after launch, with a hint.
+    private func welcome() {
+        defaults.set(true, forKey: Key.welcomed)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self, !self.isExpanded else { return }
+            self.showsWelcome = true
+            self.expand()
+        }
+    }
+
+    /// Whether neither claude-swap nor ccswap is installed, for the "set up switching" buttons.
+    var hasNoSwitcher: Bool { claudeSwap.executable == nil && codexSwap.executable == nil }
+
+    func dismissWelcome() {
+        showsWelcome = false
     }
 
     func stop() {
@@ -671,9 +708,11 @@ final class IslandModel: ObservableObject {
     }
 
     func expand(on requested: IslandTab? = nil) {
+        // A hidden tab never opens: the first one shown does instead.
+        let requested = requested.flatMap { Ordering.pick($0, in: visibleTabs) }
         if isExpanded, let requested { tab = requested }
         guard !isExpanded else { return }
-        tab = requested ?? suggestedTab
+        tab = Ordering.pick(requested ?? suggestedTab, in: visibleTabs) ?? .activity
         isExpanded = true
         accountsMonitor.isVisible = tab == .accounts
         claudeSwap.showingInIsland = tab == .accounts
@@ -693,6 +732,7 @@ final class IslandModel: ObservableObject {
 
     func collapse() {
         isExpanded = false
+        showsWelcome = false
         accountsMonitor.isVisible = false
         claudeSwap.showingInIsland = false
         codexSwap.isVisible = false
@@ -712,7 +752,7 @@ final class IslandModel: ObservableObject {
             return .accounts
         case .nowPlaying: return .media
         case .call, .timer, .timerFinished, .headphonesConnected, .charging, .lowBattery, .eventSoon, .cameraOn, .microphoneOn: return .activity
-        case nil: return tabOrder.first(where: hasContent) ?? .activity
+        case nil: return visibleTabs.first(where: hasContent) ?? visibleTabs.first ?? .activity
         }
     }
 
@@ -735,6 +775,17 @@ final class IslandModel: ObservableObject {
 
     func resetTabOrder() {
         tabOrder = IslandTab.allCases
+        hiddenTabs = []
+    }
+
+    /// Shows or hides a tab in the open island. The last one shown stays: the island needs a page.
+    func setTab(_ tab: IslandTab, shown: Bool) {
+        if shown {
+            hiddenTabs.remove(tab)
+        } else if visibleTabs.count > 1 || !visibleTabs.contains(tab) {
+            hiddenTabs.insert(tab)
+            if isExpanded, self.tab == tab, let first = visibleTabs.first { self.tab = first }
+        }
     }
 
     // MARK: - Timer
@@ -839,6 +890,8 @@ final class IslandModel: ObservableObject {
         static let players = "controlPlayers"
         static let waveform = "liveWaveform"
         static let tabOrder = "tabOrder"
+        static let hiddenTabs = "hiddenTabs"
+        static let welcomed = "shownWelcome"
         static let updates = "checkForUpdates"
         static let display = "islandDisplay"
         static let placement = "islandPlacement"
