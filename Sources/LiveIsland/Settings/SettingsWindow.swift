@@ -205,6 +205,34 @@ struct ToggleRow: View {
     }
 }
 
+/// "Quiet in Focus", with what macOS lets LiveIsland know: without permission, sounds play
+/// as before, and the row says so instead of pretending.
+private struct QuietInFocusRow: View {
+    @EnvironmentObject private var model: IslandModel
+    @ObservedObject var focus: FocusStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ToggleRow(symbol: "moon.fill", tint: .indigo, title: "Stay quiet in Focus",
+                      detail: "Agent sounds and the timer chime don't play during Do Not Disturb or any Focus",
+                      isOn: $model.quietInFocus)
+            if model.quietInFocus, focus.access != .allowed {
+                HStack(spacing: 8) {
+                    Text(focus.access == .notAsked
+                         ? "LiveIsland needs to see whether a Focus is on. Until then, sounds play as usual."
+                         : "macOS doesn't let LiveIsland see your Focus, so sounds play as usual. Allow it in System Settings › Privacy & Security › Focus.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    if focus.access == .notAsked {
+                        Button("Allow") { focus.requestAccess() }.glassButton(prominent: false)
+                    }
+                }
+            }
+        }
+        .onAppear { focus.refresh() }
+    }
+}
+
 // MARK: - Pages
 
 private struct GeneralPage: View {
@@ -477,6 +505,13 @@ private struct MediaSettingsPage: View {
                             Text(output.device)
                         }
                     }
+                    if output.choices.count > 1 {
+                        Picker("Play sound through", selection: Binding(get: { output.uid }, set: { model.volume.select($0) })) {
+                            ForEach(output.choices) { choice in
+                                Text(choice.name).tag(choice.id)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -494,6 +529,7 @@ private struct AgentsSettingsPage: View {
                 agentToggle(.codex, detail: "Sessions from ~/.codex/sessions", isOn: $model.showCodex)
                 ToggleRow(symbol: "speaker.wave.2.fill", tint: .pink, title: "Play a sound",
                           detail: "When an agent finishes, or stops to ask you something", isOn: $model.agentSounds)
+                QuietInFocusRow(focus: model.focus)
             }
             AccountsShortcutSection()
             Section {

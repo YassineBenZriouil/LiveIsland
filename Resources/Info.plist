@@ -47,6 +47,8 @@
 	<string>LiveIsland shows your AirPods and headphones, with their battery, when they connect.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>LiveIsland shows your next calendar event and reminds you before it starts.</string>
+	<key>NSFocusStatusUsageDescription</key>
+	<string>LiveIsland keeps its sounds quiet while Do Not Disturb or another Focus is on.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

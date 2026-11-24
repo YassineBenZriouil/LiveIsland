@@ -1,11 +1,12 @@
 import AudioToolbox
 import CoreAudio
+import LiveIslandCore
 import os
 
 private let log = Logger(subsystem: "com.aissam.liveisland", category: "volume")
 
 /// The system output: which device it is, its volume and mute, kept current with Core Audio
-/// listeners and settable from the island.
+/// listeners and settable from the island, with the other outputs to switch to.
 @MainActor
 final class OutputVolume {
     struct State: Equatable {
@@ -16,6 +17,10 @@ final class OutputVolume {
         var muted: Bool
         /// Some outputs (HDMI, many interfaces) have no software volume.
         var canSetVolume: Bool
+        /// The device's UID, to tick it in the device menu.
+        var uid: String = ""
+        /// Every output that can be picked, this one included.
+        var choices: [AudioOutputChoice] = []
     }
 
     var onChange: ((State?) -> Void)?
@@ -24,9 +29,15 @@ final class OutputVolume {
     private var device = AudioObjectID(kAudioObjectUnknown)
     private var deviceListeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var defaultDeviceListener: AudioObjectPropertyListenerBlock?
+    private var deviceListListener: AudioObjectPropertyListenerBlock?
+    /// The outputs connected now, read again only when Core Audio says the list changed.
+    private var choices: [AudioOutputChoice] = []
 
     private static var defaultOutput = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    private static var devices = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain)
     private static var volume = AudioObjectPropertyAddress(
         mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume, mScope: kAudioDevicePropertyScopeOutput,
@@ -41,6 +52,17 @@ final class OutputVolume {
         }
         AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &Self.defaultOutput, .main, listener)
         defaultDeviceListener = listener
+        // Headphones connecting or leaving change the list; nothing runs in between.
+        let listListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.choices = Self.outputs()
+                self.read()
+            }
+        }
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &Self.devices, .main, listListener)
+        deviceListListener = listListener
+        choices = Self.outputs()
         attach()
     }
 
@@ -50,6 +72,19 @@ final class OutputVolume {
             AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &Self.defaultOutput, .main, listener)
         }
         defaultDeviceListener = nil
+        if let listener = deviceListListener {
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &Self.devices, .main, listener)
+        }
+        deviceListListener = nil
+    }
+
+    /// Makes the output with this UID the Mac's sound output, as picking it in Control Center
+    /// does. The default-device listener then follows it, so the island updates by itself.
+    func select(_ uid: String) {
+        guard uid != state?.uid, var id = Self.device(uid: uid) else { return }
+        let status = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &Self.defaultOutput, 0, nil,
+                                                UInt32(MemoryLayout<AudioObjectID>.size), &id)
+        if status != noErr { log.error("Couldn't switch the output: \(status)") }
     }
 
     func setVolume(_ value: Float) {
@@ -116,7 +151,8 @@ final class OutputVolume {
         publish(State(device: Self.name(of: device) ?? "Output",
                       isBluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE,
                       isBuiltIn: transport == kAudioDeviceTransportTypeBuiltIn,
-                      volume: hasVolume ? volume : 1, muted: muted != 0, canSetVolume: settable.boolValue))
+                      volume: hasVolume ? volume : 1, muted: muted != 0, canSetVolume: settable.boolValue,
+                      uid: Self.uid(of: device) ?? "", choices: choices))
     }
 
     private func publish(_ next: State?) {
@@ -125,7 +161,60 @@ final class OutputVolume {
         onChange?(next)
     }
 
-    private static func name(of device: AudioObjectID) -> String? {
+    /// Every device with output streams that isn't hidden, as menu choices.
+    private static func outputs() -> [AudioOutputChoice] {
+        var size: UInt32 = 0
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(system, &devices, 0, nil, &size) == noErr, size > 0 else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(system, &devices, 0, nil, &size, &ids) == noErr else { return [] }
+        let found = ids.compactMap { id -> AudioOutputChoice? in
+            guard hasOutput(id), !isHidden(id), let uid = uid(of: id) else { return nil }
+            return AudioOutputChoice(id: uid, name: name(of: id) ?? "Output", kind: AudioOutputs.kind(transport: transport(of: id)))
+        }
+        return AudioOutputs.choices(found)
+    }
+
+    private static func device(uid: String) -> AudioObjectID? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var cfUID = uid as CFString
+        var id = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = withUnsafeMutablePointer(to: &cfUID) { pointer in
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address,
+                                       UInt32(MemoryLayout<CFString>.size), pointer, &size, &id)
+        }
+        return status == noErr && id != kAudioObjectUnknown ? id : nil
+    }
+
+    private static func hasOutput(_ device: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: kAudioDevicePropertyScopeOutput,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        return AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr && size > 0
+    }
+
+    private static func isHidden(_ device: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyIsHidden, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectHasProperty(device, &address) else { return false }
+        var hidden: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        AudioObjectGetPropertyData(device, &address, 0, nil, &size, &hidden)
+        return hidden != 0
+    }
+
+    static func uid(of device: AudioObjectID) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var uid: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &uid) == noErr else { return nil }
+        return uid?.takeRetainedValue() as String?
+    }
+
+    static func name(of device: AudioObjectID) -> String? {
         var address = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyName, mScope: kAudioObjectPropertyScopeGlobal,
                                                  mElement: kAudioObjectPropertyElementMain)
         var name: Unmanaged<CFString>?
