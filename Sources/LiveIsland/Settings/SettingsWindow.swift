@@ -608,8 +608,9 @@ private struct SoftwareUpdatePage: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     HStack {
+                        // After a failure the same button tries again, and the page is where to get it by hand.
                         Button("Update Now") { Task { await updater.install() } }.glassButton(prominent: true)
-                        Link("Release Notes", destination: release.page).font(.system(size: 12))
+                        Link(isFailed ? "Open Release Page" : "Release Notes", destination: release.page).font(.system(size: 12))
                         Spacer()
                         if release.size > 0 {
                             Text(ByteCountFormatter.string(fromByteCount: Int64(release.size), countStyle: .file))
@@ -634,9 +635,21 @@ private struct SoftwareUpdatePage: View {
             case .checking:
                 ProgressView().controlSize(.small).frame(width: 28)
                 Text("Checking for updates…")
-            case .downloading(let release):
-                ProgressView().controlSize(.small).frame(width: 28)
-                Text("Downloading LiveIsland \(release.version.description)…")
+            case .downloading(let release, let progress):
+                Image(systemName: "arrow.down.circle").font(.system(size: 24)).foregroundStyle(.teal).frame(width: 28)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Downloading LiveIsland \(release.version.description)…")
+                    // A bar that fills as the bytes arrive, or an indeterminate one until they do.
+                    if let fraction = progress?.fraction {
+                        ProgressView(value: fraction).progressViewStyle(.linear)
+                    } else {
+                        ProgressView().progressViewStyle(.linear)
+                    }
+                    if let progress, progress.expected > 0 {
+                        Text("\(bytes(progress.received)) of \(bytes(progress.expected))")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
             case .installing(let release):
                 ProgressView().controlSize(.small).frame(width: 28)
                 Text("Installing LiveIsland \(release.version.description). It reopens in a moment.")
@@ -646,7 +659,7 @@ private struct SoftwareUpdatePage: View {
                     Text("LiveIsland \(release.version.description) is available").font(.system(size: 13, weight: .semibold))
                     Text("You have version \(updater.currentVersion)").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-            case .failed(let message):
+            case .failed(let message, _):
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 22)).foregroundStyle(.orange).frame(width: 28)
                 Text(message).fixedSize(horizontal: false, vertical: true)
             case .upToDate, .idle:
@@ -659,11 +672,22 @@ private struct SoftwareUpdatePage: View {
                 }
             }
             Spacer()
-            if updater.availableRelease == nil {
+            if updater.canCancel {
+                Button("Cancel") { updater.cancel() }
+            } else if updater.availableRelease == nil {
                 Button("Check Now") { Task { await updater.check() } }
                     .disabled(updater.isBusy)
             }
         }
+    }
+
+    private var isFailed: Bool {
+        if case .failed = updater.state { return true }
+        return false
+    }
+
+    private func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 
     private var checkedLine: String {
