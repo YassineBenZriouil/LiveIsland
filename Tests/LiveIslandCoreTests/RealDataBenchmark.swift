@@ -30,6 +30,10 @@ struct RealDataBenchmark {
             Files: \(files.count), \(bytes / 1_048_576) MB
             First read: \(first), re-check with nothing new: \(again)
             Responses: \(ledger.recordCount); today \(Format.tokens(summary.todayTokens)) tokens in \(summary.todayRequests) requests
+            Today by kind: input \(Format.tokens(summary.today.input)), output \(Format.tokens(summary.today.output)), \
+            cache writes \(Format.tokens(summary.today.cacheWrite)), cache reads \(Format.tokens(summary.today.cacheRead))
+            Today at list prices: about $\(String(format: "%.2f", summary.todayCost.dollars)) \
+            (\(summary.todayCost.unpricedRequests) replies from unknown models left out)
             Current 5-hour window: \(summary.windowStart.map { "\($0)" } ?? "none"), \(Format.tokens(summary.windowTokens)) tokens
             Latest limit notice: \(ledger.latestLimit.map { "\($0.windowLabel) \($0.status), resets \($0.resetsAt)" } ?? "none")
             """)

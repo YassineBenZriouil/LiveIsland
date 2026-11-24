@@ -16,6 +16,12 @@ final class AgentMonitor {
         var codexLimits: CodexLimits?
         /// Claude Code's own 5-hour and weekly percentages, when the status line shares them.
         var claudeLimits: ClaudeUsageLimits?
+        /// Claude Code use per day for the last 30 days, oldest first and ending today, per
+        /// model and project, with estimated cost.
+        var usageHistory: [UsageDay] = []
+        /// Codex tokens today and per day (30 days, oldest first), from its running totals.
+        var codexTodayTokens: Int?
+        var codexHistory: [CodexUsageDay] = []
     }
 
     var onUpdate: ((Snapshot) -> Void)?
@@ -94,7 +100,9 @@ final class AgentMonitor {
 /// Everything that touches the transcripts, on one background queue.
 private final class Worker: @unchecked Sendable {
     let queue = DispatchQueue(label: "com.aissam.liveisland.agents", qos: .utility)
-    private let ledger = UsageLedger()
+    private var ledger = UsageLedger()
+    private var codexLedger = CodexUsageLedger()
+    private var lastLedgerSave = Date()
     private var ledgerReady = false
     /// Session files seen recently, with what their tails said.
     private var sessions: [String: Session] = [:]
@@ -115,6 +123,7 @@ private final class Worker: @unchecked Sendable {
 
     func loadRecent() {
         let now = Date()
+        loadLedgers(now: now)
         let claudeFiles = Self.files(under: AgentMonitor.claudeRoot, modifiedSince: now.addingTimeInterval(-UsageLedger.horizon))
         let start = Date()
         ledger.ingest(claudeFiles.map(\.url), now: now, concurrency: 4)
@@ -122,6 +131,7 @@ private final class Worker: @unchecked Sendable {
         log.notice("Read \(claudeFiles.count) Claude transcripts in \(Date().timeIntervalSince(start), format: .fixed(precision: 2))s")
 
         let codexFiles = Self.files(under: AgentMonitor.codexRoot, modifiedSince: now.addingTimeInterval(-7 * 86_400))
+        codexLedger.ingest(codexFiles.filter { now.timeIntervalSince($0.modified) < UsageLedger.horizon }.map(\.url), now: now)
         // The newest Codex file holds the latest limits, even if the session is old.
         if let newest = codexFiles.max(by: { $0.modified < $1.modified }) { readCodex(newest.url, modified: newest.modified) }
         for file in claudeFiles + codexFiles where now.timeIntervalSince(file.modified) < Self.recent {
@@ -172,6 +182,7 @@ private final class Worker: @unchecked Sendable {
     private var lastHostSummary = ""
 
     func snapshot(now: Date) -> AgentMonitor.Snapshot {
+        saveLedgersIfNeeded(now: now)
         sessions = sessions.filter { now.timeIntervalSince($0.value.modified) < Self.recent }
         refreshHosts(now: now)
         var list: [AgentSession] = []
@@ -212,7 +223,44 @@ private final class Worker: @unchecked Sendable {
             usage: ledgerReady ? ledger.summary(now: now) : nil,
             claudeLimit: ledger.currentLimit(at: now),
             codexLimits: codexLimits,
-            claudeLimits: readClaudeLimits()?.current(at: now))
+            claudeLimits: readClaudeLimits()?.current(at: now),
+            usageHistory: ledgerReady ? ledger.history(days: 30, now: now) : [],
+            codexTodayTokens: ledgerReady ? codexLedger.todayTokens(now: now) : nil,
+            codexHistory: ledgerReady ? codexLedger.history(days: 30, now: now) : [])
+    }
+
+    // MARK: - Saved usage
+
+    /// Where the ledgers keep what they've read, so a launch reads only what's new.
+    private static let ledgerFolder = AgentMonitor.home.appendingPathComponent("Library/Application Support/LiveIsland", isDirectory: true)
+    private static let claudeLedgerFile = ledgerFolder.appendingPathComponent("usage-ledger.json")
+    private static let codexLedgerFile = ledgerFolder.appendingPathComponent("codex-usage.json")
+
+    private func loadLedgers(now: Date) {
+        if let saved = UsageLedger.load(from: Self.claudeLedgerFile) {
+            ledger = saved
+            // Replies that aged out while LiveIsland wasn't running go into the daily totals.
+            ledger.prune(now: now)
+        }
+        if let saved = CodexUsageLedger.load(from: Self.codexLedgerFile) {
+            codexLedger = saved
+            codexLedger.prune(now: now)
+        }
+    }
+
+    /// Saves at most once a minute, and only after something changed: when nothing is
+    /// happening this costs nothing. A save that never happens (a crash) only means the next
+    /// launch reads a little again: offsets and totals are always saved together.
+    private func saveLedgersIfNeeded(now: Date) {
+        guard ledgerReady, now.timeIntervalSince(lastLedgerSave) >= 60 else { return }
+        lastLedgerSave = now
+        codexLedger.prune(now: now)
+        do {
+            if ledger.hasUnsavedChanges { try ledger.save(to: Self.claudeLedgerFile) }
+            if codexLedger.hasUnsavedChanges { try codexLedger.save(to: Self.codexLedgerFile) }
+        } catch {
+            log.error("Couldn't save token use: \(error.localizedDescription)")
+        }
     }
 
     private var claudeLimitsFile: (modified: Date, limits: ClaudeUsageLimits?)?
@@ -243,6 +291,7 @@ private final class Worker: @unchecked Sendable {
     }
 
     private func readCodex(_ url: URL, modified: Date) {
+        codexLedger.ingest(url)
         let lines = Self.lastLines(of: url.path)
         let tail = CodexRollout.tail(of: lines)
         for line in lines.reversed() {
