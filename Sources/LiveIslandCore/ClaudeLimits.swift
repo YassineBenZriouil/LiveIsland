@@ -3,7 +3,7 @@ import Foundation
 /// Claude Code's own usage percentages, as its status line receives them. Claude Code doesn't
 /// write them anywhere else, so LiveIsland reads a small file that the user's status line
 /// command can write (opt-in: `scripts/claude-statusline-snippet.sh`).
-public struct ClaudeUsageLimits: Equatable, Sendable {
+public struct UsageLimits: Equatable, Sendable {
     public var fiveHour: RateLimitWindow?
     public var sevenDay: RateLimitWindow?
     public var observedAt: Date
@@ -23,22 +23,22 @@ public struct ClaudeUsageLimits: Equatable, Sendable {
     public static let fileName = "liveisland-limits.json"
 
     /// A window that has reset since it was observed starts again from zero.
-    public func current(at now: Date) -> ClaudeUsageLimits {
-        ClaudeUsageLimits(fiveHour: fiveHour?.current(at: now), sevenDay: sevenDay?.current(at: now), observedAt: observedAt, session: session)
+    public func current(at now: Date) -> UsageLimits {
+        UsageLimits(fiveHour: fiveHour?.current(at: now), sevenDay: sevenDay?.current(at: now), observedAt: observedAt, session: session)
     }
 
     /// Reads either the status line's whole input or `{"observed_at": …, "rate_limits": …}`.
     /// `modified` stands in for `observed_at` when the file doesn't say. Plans without a
     /// 5-hour limit send only `seven_day`: then `fiveHour` stays nil.
-    public static func parse(_ data: Data, modified: Date) -> ClaudeUsageLimits? {
+    public static func parse(_ data: Data, modified: Date) -> UsageLimits? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let limits = object["rate_limits"] as? [String: Any]
         else { return nil }
         let observed = (object["observed_at"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? modified
-        let result = ClaudeUsageLimits(fiveHour: window(limits["five_hour"], minutes: 300),
-                                       sevenDay: window(limits["seven_day"], minutes: 10_080),
-                                       observedAt: observed,
-                                       session: (object["transcript_path"] as? String).flatMap { $0.isEmpty ? nil : $0 })
+        let result = UsageLimits(fiveHour: window(limits["five_hour"], minutes: 300),
+                                 sevenDay: window(limits["seven_day"], minutes: 10_080),
+                                 observedAt: observed,
+                                 session: (object["transcript_path"] as? String).flatMap { $0.isEmpty ? nil : $0 })
         return result.windows.isEmpty ? nil : result
     }
 

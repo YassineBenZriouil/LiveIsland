@@ -2,7 +2,7 @@ import Foundation
 
 /// Who a login belongs to: for Claude Code, from the `oauthAccount` object it keeps in
 /// `~/.claude.json`; for Codex, from its `auth.json` (`CodexLogin`).
-public struct ClaudeAccountIdentity: Codable, Equatable, Sendable {
+public struct AccountIdentity: Codable, Equatable, Sendable {
     public var accountUUID: String
     public var email: String
     public var name: String?
@@ -22,7 +22,7 @@ public struct ClaudeAccountIdentity: Codable, Equatable, Sendable {
     }
 
     /// One person can have the same email in a personal and a team organization.
-    public var key: String { ClaudeAccountIdentity.key(email: email, organization: organizationUUID) }
+    public var key: String { AccountIdentity.key(email: email, organization: organizationUUID) }
 
     public static func key(email: String, organization: String?) -> String {
         email.lowercased() + "|" + (organization ?? "")
@@ -41,15 +41,15 @@ public struct ClaudeAccountIdentity: Codable, Equatable, Sendable {
         return email
     }
 
-    public static func parse(_ oauthAccount: Data) -> ClaudeAccountIdentity? {
+    public static func parse(_ oauthAccount: Data) -> AccountIdentity? {
         guard let object = try? JSONSerialization.jsonObject(with: oauthAccount) as? [String: Any],
               let uuid = object["accountUuid"] as? String, let email = object["emailAddress"] as? String
         else { return nil }
         let name = (object["displayName"] as? String) ?? (object["fullName"] as? String)
-        return ClaudeAccountIdentity(accountUUID: uuid, email: email, name: name,
-                                     organizationUUID: object["organizationUuid"] as? String,
-                                     organizationName: object["organizationName"] as? String,
-                                     tier: (object["organizationRateLimitTier"] as? String) ?? (object["userRateLimitTier"] as? String))
+        return AccountIdentity(accountUUID: uuid, email: email, name: name,
+                               organizationUUID: object["organizationUuid"] as? String,
+                               organizationName: object["organizationName"] as? String,
+                               tier: (object["organizationRateLimitTier"] as? String) ?? (object["userRateLimitTier"] as? String))
     }
 }
 
@@ -243,7 +243,7 @@ public enum ClaudeLogin {
 /// just who it is and its limits when last seen.
 public struct AccountBook: Codable, Equatable, Sendable {
     public struct Entry: Codable, Equatable, Sendable {
-        public var identity: ClaudeAccountIdentity
+        public var identity: AccountIdentity
         public var fiveHour: RateLimitWindow?
         public var sevenDay: RateLimitWindow?
         public var limitsObservedAt: Date?
@@ -252,7 +252,7 @@ public struct AccountBook: Codable, Equatable, Sendable {
         /// When the saved login stops working and needs a fresh /login.
         public var loginExpiresAt: Date?
 
-        public init(identity: ClaudeAccountIdentity, hasSavedLogin: Bool = false) {
+        public init(identity: AccountIdentity, hasSavedLogin: Bool = false) {
             self.identity = identity
             self.hasSavedLogin = hasSavedLogin
         }
@@ -268,7 +268,7 @@ public struct AccountBook: Codable, Equatable, Sendable {
     }
 
     /// Notes the account Claude Code is logged in to now.
-    public mutating func setActive(_ identity: ClaudeAccountIdentity, at now: Date) {
+    public mutating func setActive(_ identity: AccountIdentity, at now: Date) {
         if entries[identity.key] == nil {
             entries[identity.key] = Entry(identity: identity)
         } else {
@@ -286,7 +286,7 @@ public struct AccountBook: Codable, Equatable, Sendable {
     /// report from an older session could be any account's: it waits. Returns false when the
     /// report can't be placed yet.
     @discardableResult
-    public mutating func record(_ limits: ClaudeUsageLimits, sessionStartedAt: Date?) -> Bool {
+    public mutating func record(_ limits: UsageLimits, sessionStartedAt: Date?) -> Bool {
         let matching = entries.filter { Self.sameWindows($0.value, limits) }.map(\.key)
         if let owner = owner(among: matching, sessionStartedAt: sessionStartedAt) {
             store(limits, in: owner)
@@ -342,7 +342,7 @@ public struct AccountBook: Codable, Equatable, Sendable {
         version = Self.currentVersion
     }
 
-    private mutating func store(_ limits: ClaudeUsageLimits, in key: String) {
+    private mutating func store(_ limits: UsageLimits, in key: String) {
         if let seen = entries[key]!.limitsObservedAt, seen > limits.observedAt { return }
         entries[key]!.fiveHour = limits.fiveHour
         entries[key]!.sevenDay = limits.sevenDay
@@ -402,7 +402,7 @@ public struct AccountBook: Codable, Equatable, Sendable {
 
     /// Same reset times for every window both sides know: the same account. Reset times move
     /// only when a window starts over, and two accounts sharing both is vanishingly unlikely.
-    static func sameWindows(_ entry: Entry, _ limits: ClaudeUsageLimits) -> Bool {
+    static func sameWindows(_ entry: Entry, _ limits: UsageLimits) -> Bool {
         let pairs = [(entry.fiveHour?.resetsAt, limits.fiveHour?.resetsAt), (entry.sevenDay?.resetsAt, limits.sevenDay?.resetsAt)]
             .filter { $0.0 != nil && $0.1 != nil }
         return !pairs.isEmpty && pairs.count == [limits.fiveHour?.resetsAt, limits.sevenDay?.resetsAt].compactMap { $0 }.count
@@ -418,7 +418,7 @@ public struct AccountBook: Codable, Equatable, Sendable {
     public mutating func removeDuplicateReadings() {
         let read = entries.filter { $0.value.limitsObservedAt != nil }
         for (key, entry) in read {
-            let limits = ClaudeUsageLimits(fiveHour: entry.fiveHour, sevenDay: entry.sevenDay, observedAt: entry.limitsObservedAt!)
+            let limits = UsageLimits(fiveHour: entry.fiveHour, sevenDay: entry.sevenDay, observedAt: entry.limitsObservedAt!)
             let newer = read.contains { other in
                 other.key != key && Self.sameWindows(other.value, limits)
                     && (other.value.limitsObservedAt! > entry.limitsObservedAt! || (other.value.limitsObservedAt! == entry.limitsObservedAt! && other.key == activeKey))
@@ -441,7 +441,7 @@ public struct AccountBook: Codable, Equatable, Sendable {
 }
 
 /// An account as the island shows it, whatever it came from.
-public struct ClaudeAccount: Identifiable, Equatable, Sendable {
+public struct Account: Identifiable, Equatable, Sendable {
     public enum Switcher: String, Codable, Sendable {
         case liveIsland
         case claudeSwap
@@ -449,7 +449,7 @@ public struct ClaudeAccount: Identifiable, Equatable, Sendable {
         case ccswap
     }
 
-    public var identity: ClaudeAccountIdentity
+    public var identity: AccountIdentity
     public var kind: AgentKind
     public var isActive: Bool
     /// Nil when the account has no 5-hour limit (some plans have only the weekly ones), or
@@ -469,7 +469,7 @@ public struct ClaudeAccount: Identifiable, Equatable, Sendable {
 
     public var id: String { kind.rawValue + ":" + identity.key }
 
-    public init(identity: ClaudeAccountIdentity, kind: AgentKind = .claude, isActive: Bool = false, fiveHour: RateLimitWindow? = nil,
+    public init(identity: AccountIdentity, kind: AgentKind = .claude, isActive: Bool = false, fiveHour: RateLimitWindow? = nil,
                 sevenDay: RateLimitWindow? = nil, limitsObservedAt: Date? = nil, switcher: Switcher? = nil,
                 needsLogin: Bool = false, claudeSwapNumber: Int? = nil) {
         self.identity = identity
@@ -484,7 +484,7 @@ public struct ClaudeAccount: Identifiable, Equatable, Sendable {
     }
 
     /// Windows that reset since they were seen count from zero again.
-    public func current(at now: Date) -> ClaudeAccount {
+    public func current(at now: Date) -> Account {
         var account = self
         account.fiveHour = fiveHour?.current(at: now)
         account.sevenDay = sevenDay?.current(at: now)
@@ -512,7 +512,7 @@ public struct ClaudeAccount: Identifiable, Equatable, Sendable {
 
     /// The account to move to next: one that can be switched to, with the most room left.
     /// Accounts never measured come last; one at 95% or more has no real room left.
-    public static func best(_ accounts: [ClaudeAccount], at now: Date) -> ClaudeAccount? {
+    public static func best(_ accounts: [Account], at now: Date) -> Account? {
         accounts
             .filter { !$0.isActive && $0.switcher != nil && !$0.needsLogin }
             .map { $0.current(at: now) }
@@ -550,7 +550,7 @@ public struct ClaudeSwapAccount: Equatable, Sendable {
     public var needsLogin: Bool { usageStatus == "relogin_required" || usageStatus == "token_expired" }
     public var name: String { alias ?? email }
 
-    /// Every limit it reports, as `ClaudeAccount.windows` orders them.
+    /// Every limit it reports, as `Account.windows` orders them.
     public var windows: [RateLimitWindow] { [fiveHour, sevenDay].compactMap { $0 } + models }
 
     /// Whether any of these accounts has a 5-hour limit; nil while none has been read. Each
@@ -610,23 +610,13 @@ public enum ClaudeSwapJSON {
     }
 }
 
-public enum CodexAccounts {
-    /// The Codex accounts used here, the one in use first. Only those with a saved login can be
-    /// switched to.
-    public static func list(book: AccountBook, switching: Bool, now: Date) -> [ClaudeAccount] {
-        AccountList.fromBook(book, kind: .codex, now: now, name: \.email) { entry in
-            switching && entry.hasSavedLogin ? .liveIsland : nil
-        }
-    }
-}
-
 public enum ClaudeAccounts {
     /// The Claude accounts to show. With claude-swap managing accounts, exactly its list, in its
     /// order: it holds the logins and switches them. What LiveIsland saw of an account (its
     /// plan, a fresher reading for the one in use) fills in. Without claude-swap, the accounts
     /// Claude Code has used here, with their limits.
-    public static func merge(book: AccountBook, claudeSwap: [ClaudeSwapAccount]?, switcher: ClaudeAccount.Switcher?,
-                             now: Date) -> [ClaudeAccount] {
+    public static func merge(book: AccountBook, claudeSwap: [ClaudeSwapAccount]?, switcher: Account.Switcher?,
+                             now: Date) -> [Account] {
         if let claudeSwap, !claudeSwap.isEmpty { return AccountList.fromSwitcher(claudeSwap, book: book, now: now) }
         return AccountList.fromBook(book, kind: .claude, now: now, name: \.displayName) { _ in
             switcher == .claudeSwap ? nil : switcher
@@ -645,18 +635,18 @@ protocol SwitcherRow {
     /// When the switcher read its usage.
     var readingAt: Date? { get }
     /// The account as the switcher reports it, as `known` (LiveIsland's own entry) names it.
-    func account(known: ClaudeAccountIdentity?, now: Date) -> ClaudeAccount
+    func account(known: AccountIdentity?, now: Date) -> Account
 }
 
 /// How the island lists accounts, for Claude Code and Codex alike.
 enum AccountList {
     /// The accounts the book knows, the one in use first, then by `name`.
-    static func fromBook(_ book: AccountBook, kind: AgentKind, now: Date, name: (ClaudeAccountIdentity) -> String,
-                         switcher: (AccountBook.Entry) -> ClaudeAccount.Switcher?) -> [ClaudeAccount] {
+    static func fromBook(_ book: AccountBook, kind: AgentKind, now: Date, name: (AccountIdentity) -> String,
+                         switcher: (AccountBook.Entry) -> Account.Switcher?) -> [Account] {
         book.entries.map { key, entry in
-            ClaudeAccount(identity: entry.identity, kind: kind, isActive: key == book.activeKey,
-                          fiveHour: entry.fiveHour, sevenDay: entry.sevenDay, limitsObservedAt: entry.limitsObservedAt,
-                          switcher: switcher(entry))
+            Account(identity: entry.identity, kind: kind, isActive: key == book.activeKey,
+                    fiveHour: entry.fiveHour, sevenDay: entry.sevenDay, limitsObservedAt: entry.limitsObservedAt,
+                    switcher: switcher(entry))
                 .current(at: now)
         }
         .sorted { lhs, rhs in
@@ -669,12 +659,12 @@ enum AccountList {
     /// Exactly the switcher's accounts, the one in use first, then in its order. The book's
     /// entry for each (matched as `AccountBook.entry` explains) fills in who it is, and its
     /// reading of the account in use when that's newer.
-    static func fromSwitcher<Row: SwitcherRow>(_ rows: [Row], book: AccountBook, now: Date) -> [ClaudeAccount] {
+    static func fromSwitcher<Row: SwitcherRow>(_ rows: [Row], book: AccountBook, now: Date) -> [Account] {
         var claimed: [String: Set<String>] = [:]
         for row in rows {
             if let organization = row.organizationUUID { claimed[row.email.lowercased(), default: []].insert(organization) }
         }
-        return rows.map { row -> (number: Int, account: ClaudeAccount) in
+        return rows.map { row -> (number: Int, account: Account) in
             let known = book.entry(email: row.email, organization: row.organizationUUID, isActive: row.isActive,
                                    claimedOrganizations: claimed[row.email.lowercased()] ?? [])
             var account = row.account(known: known?.identity, now: now)
@@ -686,7 +676,7 @@ enum AccountList {
     }
 }
 
-extension ClaudeAccount {
+extension Account {
     /// Claude Code's status line and Codex's sessions report the account in use as it works;
     /// a switcher polls every few minutes. The newer reading of the account in use wins. A
     /// newer report of the week without 5 hours means the plan has no 5-hour limit (any
@@ -704,14 +694,14 @@ extension ClaudeAccount {
 extension ClaudeSwapAccount: SwitcherRow {
     var readingAt: Date? { usageFetchedAt }
 
-    func account(known: ClaudeAccountIdentity?, now: Date) -> ClaudeAccount {
-        var identity = known ?? ClaudeAccountIdentity(accountUUID: "", email: email, organizationUUID: organizationUUID,
-                                                      organizationName: organizationName)
+    func account(known: AccountIdentity?, now: Date) -> Account {
+        var identity = known ?? AccountIdentity(accountUUID: "", email: email, organizationUUID: organizationUUID,
+                                                organizationName: organizationName)
         identity.email = known?.email ?? email.lowercased()
         if let alias { identity.name = alias }
-        var account = ClaudeAccount(identity: identity, isActive: isActive, fiveHour: fiveHour, sevenDay: sevenDay,
-                                    limitsObservedAt: usageFetchedAt ?? now, switcher: .claudeSwap,
-                                    needsLogin: needsLogin, claudeSwapNumber: number)
+        var account = Account(identity: identity, isActive: isActive, fiveHour: fiveHour, sevenDay: sevenDay,
+                              limitsObservedAt: usageFetchedAt ?? now, switcher: .claudeSwap,
+                              needsLogin: needsLogin, claudeSwapNumber: number)
         account.models = models
         return account
     }

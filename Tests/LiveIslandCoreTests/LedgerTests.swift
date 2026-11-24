@@ -112,6 +112,42 @@ struct UsageLedgerReadingTests {
         #expect(ledger.recordCount == 1)
     }
 
+    @Test func aLineLongerThanAReadIsStillCounted() throws {
+        // Reads come 8 MB at a time; a reply with a huge pasted file spans several of them.
+        let scratch = Scratch()
+        defer { scratch.remove() }
+        let url = scratch.file()
+        let huge = String(repeating: "x", count: 9 << 20)
+        let big = Fixture.claudeAssistant(id: "msg_big", at: "2026-10-22T11:00:00.000Z", input: 7, output: 0, cacheWrite: 0, cacheRead: 0,
+                                          content: #"[{"type":"text","text":"\#(huge)"}]"#)
+        try scratch.append([reply("msg_small", at: "2026-10-22T10:59:00.000Z", input: 3), big,
+                            reply("msg_after", at: "2026-10-22T11:01:00.000Z", input: 5)], to: url)
+        let now = date("2026-10-22T12:00:00.000Z")
+        let ledger = UsageLedger()
+        ledger.ingest(url, now: now, calendar: utc)
+        #expect(ledger.recordCount == 3)
+        #expect(ledger.summary(now: now, calendar: utc).today.input == 15)
+        // Everything was read: reading again adds nothing.
+        ledger.ingest(url, now: now, calendar: utc)
+        #expect(ledger.summary(now: now, calendar: utc).today.input == 15)
+    }
+
+    @Test func aRecentReplyInTwoTranscriptsCountsOnce() throws {
+        // A resumed or forked session copies the conversation, recent replies included.
+        let scratch = Scratch()
+        defer { scratch.remove() }
+        let now = date("2026-10-22T12:00:00.000Z")
+        let shared = reply("msg_shared", at: "2026-10-22T11:00:00.000Z", input: 40)
+        try scratch.append([shared], to: scratch.file("first.jsonl"))
+        try scratch.append([shared, reply("msg_own", at: "2026-10-22T11:30:00.000Z", input: 2)], to: scratch.file("fork.jsonl"))
+        let ledger = UsageLedger()
+        ledger.ingest([scratch.file("first.jsonl"), scratch.file("fork.jsonl")], now: now, concurrency: 2, calendar: utc)
+        let summary = ledger.summary(now: now, calendar: utc)
+        #expect(ledger.recordCount == 2)
+        #expect(summary.today.input == 42)
+        #expect(summary.todayRequests == 2)
+    }
+
     @Test func theLargestUsageOfAReplysLinesCounts() throws {
         let scratch = Scratch()
         defer { scratch.remove() }
@@ -465,6 +501,26 @@ struct MarkedLineScanTests {
         var hits: [[Int?]] = []
         JSONLScanner.forEachLine(containing: ["a"], in: Fixture.data("a a a\nb\na\n")) { _, found in hits.append(found) }
         #expect(hits == [[0], [0]])
+    }
+
+    @Test func aMarkerOnlyInTheTrailingPartialLineWaits() {
+        var lines: [String] = []
+        let data = Fixture.data("one\nnothing\ntwo unfinished")
+        let consumed = JSONLScanner.forEachLine(containing: ["two"], in: data) { line, _ in
+            lines.append(String(decoding: line, as: UTF8.self))
+        }
+        #expect(lines.isEmpty)
+        #expect(consumed == "one\nnothing\n".utf8.count, "complete lines without a marker are still consumed")
+    }
+
+    @Test func linesAreFoundFarFromTheLastHit() {
+        // Many plain lines between hits: each line handed over must start at its own start.
+        let filler = Array(repeating: #"{"type":"user"}"#, count: 500).joined(separator: "\n")
+        let data = Fixture.data("mark first\n\(filler)\nlast mark\n\(filler)\n")
+        var lines: [(String, [Int?])] = []
+        JSONLScanner.forEachLine(containing: ["mark"], in: data) { line, hits in lines.append((String(decoding: line, as: UTF8.self), hits)) }
+        #expect(lines.map(\.0) == ["mark first", "last mark"])
+        #expect(lines.map(\.1) == [[0], [5]])
     }
 
     @Test func lastRangeSearchesBackwards() {

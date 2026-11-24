@@ -214,7 +214,7 @@ private struct CodexSwapHeader: View {
 
 private struct AccountRow: View {
     @EnvironmentObject private var model: IslandModel
-    let account: ClaudeAccount
+    let account: Account
     let isBest: Bool
 
     var body: some View {
@@ -318,7 +318,7 @@ struct LimitMeter: View {
 
 /// Initials on a color picked from the email, so each account keeps its color.
 struct AccountAvatar: View {
-    let identity: ClaudeAccountIdentity
+    let identity: AccountIdentity
     var size: CGFloat = 30
 
     var body: some View {

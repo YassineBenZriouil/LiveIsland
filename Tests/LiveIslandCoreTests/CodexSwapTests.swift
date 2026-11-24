@@ -91,9 +91,9 @@ struct CodexSwapTests {
     @Test func showsExactlyCcswapsAccounts() throws {
         let now = try #require(Format.date(iso8601: "2026-10-28T12:00:00Z"))
         var book = AccountBook()
-        let main = ClaudeAccountIdentity(accountUUID: "user-1", email: "main@example.com", name: "Main", organizationUUID: "ws-1", tier: "pro")
+        let main = AccountIdentity(accountUUID: "user-1", email: "main@example.com", name: "Main", organizationUUID: "ws-1", tier: "pro")
         book.setActive(main, at: now)
-        book.setActive(ClaudeAccountIdentity(accountUUID: "user-9", email: "gone@example.com"), at: now)
+        book.setActive(AccountIdentity(accountUUID: "user-9", email: "gone@example.com"), at: now)
         book.setActive(main, at: now)
         let swap = try #require(CodexSwapJSON.accounts(list: Data(Codex.list.utf8), usage: Data(Codex.usage.utf8), readAt: now))
         let accounts = CodexAccounts.merge(book: book, ccswap: swap, now: now)
@@ -111,7 +111,7 @@ struct CodexSwapTests {
     @Test func aFresherSessionReadingWinsForTheAccountInUse() throws {
         let now = try #require(Format.date(iso8601: "2026-10-28T12:00:00Z"))
         var book = AccountBook()
-        let main = ClaudeAccountIdentity(accountUUID: "user-1", email: "main@example.com", organizationUUID: "ws-1")
+        let main = AccountIdentity(accountUUID: "user-1", email: "main@example.com", organizationUUID: "ws-1")
         book.setActive(main, at: now)
         book.entries[main.key]?.fiveHour = RateLimitWindow(usedPercent: 40, windowMinutes: 300, resetsAt: now.addingTimeInterval(3_600))
         book.entries[main.key]?.limitsObservedAt = now.addingTimeInterval(60)

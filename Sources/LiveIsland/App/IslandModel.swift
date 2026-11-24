@@ -570,30 +570,30 @@ final class IslandModel: ObservableObject {
 
     // MARK: - Claude accounts
 
-    var accounts: [ClaudeAccount] { accountsState.accounts }
-    var codexAccounts: [ClaudeAccount] { accountsState.codexAccounts }
+    var accounts: [Account] { accountsState.accounts }
+    var codexAccounts: [Account] { accountsState.codexAccounts }
 
     /// The account in use, when it ran out: by its own numbers, which include the limit Claude
     /// gave when it refused a request. A refusal still pending from the previous account
     /// doesn't count.
-    var exhaustedAccount: ClaudeAccount? {
+    var exhaustedAccount: Account? {
         guard let active = accountsState.active, active.current(at: Date()).isAtLimit else { return nil }
         return active
     }
 
     /// Where to go next: the account with the most room that can be switched to.
-    var bestAccount: ClaudeAccount? { ClaudeAccount.best(accounts, at: Date()) }
+    var bestAccount: Account? { Account.best(accounts, at: Date()) }
 
-    var exhaustedCodexAccount: ClaudeAccount? {
+    var exhaustedCodexAccount: Account? {
         guard let active = accountsState.activeCodex, active.current(at: Date()).isAtLimit else { return nil }
         return active
     }
 
-    var bestCodexAccount: ClaudeAccount? { ClaudeAccount.best(codexAccounts, at: Date()) }
+    var bestCodexAccount: Account? { Account.best(codexAccounts, at: Date()) }
 
     /// Claude accounts switch through claude-swap, Codex ones through ccswap.
     /// Only says "Now on" when the switch happened; one switch at a time.
-    func switchAccount(_ account: ClaudeAccount) {
+    func switchAccount(_ account: Account) {
         guard accountsState.switching == nil else { return }
         guard account.kind == .claude else { return switchCodex(account) }
         guard let number = account.claudeSwapNumber else { return }
@@ -610,7 +610,7 @@ final class IslandModel: ObservableObject {
         }
     }
 
-    private func switchCodex(_ account: ClaudeAccount) {
+    private func switchCodex(_ account: Account) {
         guard let number = account.ccswapNumber else { return }
         guard codexSwap.busy == nil else {
             return accountsMonitor.announce("ccswap is busy: try again in a moment", isError: true)
@@ -700,11 +700,11 @@ final class IslandModel: ObservableObject {
         return LimitForecast.runsOut(active, projected: swap?.projectedExhaustionAt, willLastToReset: swap?.willLastToReset, at: now)
     }
 
-    private func name(of account: ClaudeAccount) -> String {
+    private func name(of account: Account) -> String {
         account.kind == .claude ? account.identity.displayName : account.identity.email
     }
 
-    func forgetAccount(_ account: ClaudeAccount) {
+    func forgetAccount(_ account: Account) {
         accountsMonitor.forget(account)
     }
 

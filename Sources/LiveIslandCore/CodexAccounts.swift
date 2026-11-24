@@ -4,7 +4,7 @@ import Foundation
 /// the person, from the claims inside its ID token. The token's signature isn't checked: it
 /// only labels a login Codex itself wrote.
 public enum CodexLogin {
-    public static func identity(in authJSON: Data) -> ClaudeAccountIdentity? {
+    public static func identity(in authJSON: Data) -> AccountIdentity? {
         guard let object = try? JSONSerialization.jsonObject(with: authJSON) as? [String: Any],
               let tokens = object["tokens"] as? [String: Any],
               let idToken = tokens["id_token"] as? String,
@@ -14,9 +14,9 @@ public enum CodexLogin {
         let auth = claims["https://api.openai.com/auth"] as? [String: Any] ?? [:]
         let workspace = (tokens["account_id"] as? String) ?? (auth["chatgpt_account_id"] as? String)
         let user = (auth["chatgpt_user_id"] as? String) ?? (auth["user_id"] as? String) ?? (claims["sub"] as? String) ?? email
-        return ClaudeAccountIdentity(accountUUID: user, email: email, name: claims["name"] as? String,
-                                     organizationUUID: workspace, organizationName: nil,
-                                     tier: auth["chatgpt_plan_type"] as? String)
+        return AccountIdentity(accountUUID: user, email: email, name: claims["name"] as? String,
+                               organizationUUID: workspace, organizationName: nil,
+                               tier: auth["chatgpt_plan_type"] as? String)
     }
 
     /// The JSON in the middle of a JWT, base64url-encoded.
@@ -50,10 +50,20 @@ public enum CodexPlan {
 
 extension CodexLimits {
     /// The same shape as Claude Code's limits, so one account book serves both.
-    public var usageLimits: ClaudeUsageLimits {
+    public var usageLimits: UsageLimits {
         let windows = [primary, secondary].compactMap { $0 }
-        return ClaudeUsageLimits(fiveHour: windows.first { $0.windowMinutes < 1_440 },
-                                 sevenDay: windows.first { $0.windowMinutes >= 1_440 },
-                                 observedAt: observedAt, session: session)
+        return UsageLimits(fiveHour: windows.first { $0.windowMinutes < 1_440 },
+                           sevenDay: windows.first { $0.windowMinutes >= 1_440 },
+                           observedAt: observedAt, session: session)
+    }
+}
+
+public enum CodexAccounts {
+    /// The Codex accounts used here, the one in use first. Only those with a saved login can be
+    /// switched to.
+    public static func list(book: AccountBook, switching: Bool, now: Date) -> [Account] {
+        AccountList.fromBook(book, kind: .codex, now: now, name: \.email) { entry in
+            switching && entry.hasSavedLogin ? .liveIsland : nil
+        }
     }
 }

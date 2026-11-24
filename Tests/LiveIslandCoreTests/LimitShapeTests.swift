@@ -31,12 +31,12 @@ struct LimitShapeTests {
     let now = Date(timeIntervalSince1970: 1_792_850_000)
 
     @Test func theStatusLineMaySendOnlyTheWeek() throws {
-        let both = try #require(ClaudeUsageLimits.parse(Fixture.data(Shape.statusLineWithFiveHour), modified: now))
+        let both = try #require(UsageLimits.parse(Fixture.data(Shape.statusLineWithFiveHour), modified: now))
         #expect(both.fiveHour?.usedPercent == 30 && both.sevenDay?.usedPercent == 47)
         #expect(both.windows.map(\.shortLabel) == ["5 hours", "Week"])
 
         for json in [Shape.statusLineWeekOnly, Shape.statusLineNullFiveHour] {
-            let week = try #require(ClaudeUsageLimits.parse(Fixture.data(json), modified: now))
+            let week = try #require(UsageLimits.parse(Fixture.data(json), modified: now))
             #expect(week.fiveHour == nil, "no 5-hour limit, not a 0% one")
             #expect(week.sevenDay?.usedPercent == 64)
             #expect(week.windows.map(\.shortLabel) == ["Week"])
@@ -75,12 +75,12 @@ struct LimitShapeTests {
     }
 
     @Test func aNewerWeekOnlyReadingDropsAnOlder5HourOne() throws {
-        let identity = ClaudeAccountIdentity(accountUUID: "acct-w", email: "weekly@example.com")
+        let identity = AccountIdentity(accountUUID: "acct-w", email: "weekly@example.com")
         var book = AccountBook()
         book.setActive(identity, at: now)
         let reset = now.addingTimeInterval(400_000)
-        let placed = book.record(ClaudeUsageLimits(fiveHour: nil, sevenDay: RateLimitWindow(usedPercent: 65, windowMinutes: 10_080, resetsAt: reset),
-                                                   observedAt: now.addingTimeInterval(60)), sessionStartedAt: now)
+        let placed = book.record(UsageLimits(fiveHour: nil, sevenDay: RateLimitWindow(usedPercent: 65, windowMinutes: 10_080, resetsAt: reset),
+                                             observedAt: now.addingTimeInterval(60)), sessionStartedAt: now)
         #expect(placed)
         // claude-swap's older reading still had a 5-hour limit.
         let swap = ClaudeSwapAccount(number: 2, email: "weekly@example.com", organizationName: nil, organizationUUID: nil, isActive: true,
@@ -92,11 +92,11 @@ struct LimitShapeTests {
     }
 
     @Test func decisionsFallBackToTheWeek() {
-        func account(_ email: String, five: Double?, week: Double?, fable: Double? = nil, active: Bool = false) -> ClaudeAccount {
-            var account = ClaudeAccount(identity: ClaudeAccountIdentity(accountUUID: email, email: email), isActive: active,
-                                        fiveHour: five.map { RateLimitWindow(usedPercent: $0, windowMinutes: 300, resetsAt: now.addingTimeInterval(600)) },
-                                        sevenDay: week.map { RateLimitWindow(usedPercent: $0, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(86_400)) },
-                                        limitsObservedAt: now, switcher: .claudeSwap)
+        func account(_ email: String, five: Double?, week: Double?, fable: Double? = nil, active: Bool = false) -> Account {
+            var account = Account(identity: AccountIdentity(accountUUID: email, email: email), isActive: active,
+                                  fiveHour: five.map { RateLimitWindow(usedPercent: $0, windowMinutes: 300, resetsAt: now.addingTimeInterval(600)) },
+                                  sevenDay: week.map { RateLimitWindow(usedPercent: $0, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(86_400)) },
+                                  limitsObservedAt: now, switcher: .claudeSwap)
             account.models = fable.map { [RateLimitWindow(usedPercent: $0, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(86_400), model: "Fable")] } ?? []
             return account
         }
@@ -105,14 +105,14 @@ struct LimitShapeTests {
         #expect(out.exhaustedWindow?.windowMinutes == 10_080)
         #expect(account("fable", five: nil, week: 30, fable: 100).isAtLimit == false, "a model's own limit leaves the other models working")
         let accounts = [out, account("busy", five: 10, week: 70), account("roomy", five: nil, week: 25, fable: 90)]
-        #expect(ClaudeAccount.best(accounts, at: now)?.identity.email == "roomy")
+        #expect(Account.best(accounts, at: now)?.identity.email == "roomy")
         // A model's week resets like any other.
         let later = account("fable", five: nil, week: 30, fable: 80).current(at: now.addingTimeInterval(90_000))
         #expect(later.models.first?.usedPercent == 0 && later.models.first?.resetsAt == nil)
     }
 
     @Test func aModelsRefusalDoesNotInventA5HourLimit() throws {
-        let identity = ClaudeAccountIdentity(accountUUID: "acct-w", email: "weekly@example.com")
+        let identity = AccountIdentity(accountUUID: "acct-w", email: "weekly@example.com")
         var book = AccountBook()
         book.setActive(identity, at: now)
         let notice = ClaudeLimitNotice(status: "rejected", type: "seven_day_opus", resetsAt: now.addingTimeInterval(9000), observedAt: now)

@@ -191,7 +191,7 @@ extension CodexAccounts {
     /// order: it holds the logins and switches them. What LiveIsland saw of an account (who it
     /// is, a fresher reading for the one in use from Codex's own sessions) fills in. Without
     /// ccswap, the accounts Codex has used here, with their limits.
-    public static func merge(book: AccountBook, ccswap: [CodexSwapAccount]?, now: Date) -> [ClaudeAccount] {
+    public static func merge(book: AccountBook, ccswap: [CodexSwapAccount]?, now: Date) -> [Account] {
         guard let ccswap, !ccswap.isEmpty else { return list(book: book, switching: false, now: now) }
         return AccountList.fromSwitcher(ccswap, book: book, now: now)
     }
@@ -202,12 +202,12 @@ extension CodexSwapAccount: SwitcherRow {
     var organizationUUID: String? { nil }
     var readingAt: Date? { usageReadAt }
 
-    func account(known: ClaudeAccountIdentity?, now: Date) -> ClaudeAccount {
-        var identity = known ?? ClaudeAccountIdentity(accountUUID: "", email: email.lowercased())
+    func account(known: AccountIdentity?, now: Date) -> Account {
+        var identity = known ?? AccountIdentity(accountUUID: "", email: email.lowercased())
         if !planType.isEmpty { identity.tier = planType }
-        var account = ClaudeAccount(identity: identity, kind: .codex, isActive: isActive, fiveHour: fiveHour,
-                                    sevenDay: weekly, limitsObservedAt: usageReadAt ?? now, switcher: .ccswap,
-                                    needsLogin: needsLogin)
+        var account = Account(identity: identity, kind: .codex, isActive: isActive, fiveHour: fiveHour,
+                              sevenDay: weekly, limitsObservedAt: usageReadAt ?? now, switcher: .ccswap,
+                              needsLogin: needsLogin)
         account.ccswapNumber = number
         return account
     }

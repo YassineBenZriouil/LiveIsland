@@ -66,11 +66,11 @@ struct LimitMomentsTests {
 
     private func account(_ email: String, active: Bool = false, fiveHour: Double? = nil, fiveResets: TimeInterval? = 3600,
                          week: Double? = nil, weekResets: TimeInterval? = 3 * 86_400,
-                         switchable: Bool = true) -> ClaudeAccount {
-        ClaudeAccount(identity: ClaudeAccountIdentity(accountUUID: email, email: email), isActive: active,
-                      fiveHour: fiveHour.map { RateLimitWindow(usedPercent: $0, windowMinutes: 300, resetsAt: fiveResets.map(now.addingTimeInterval)) },
-                      sevenDay: week.map { RateLimitWindow(usedPercent: $0, windowMinutes: 10_080, resetsAt: weekResets.map(now.addingTimeInterval)) },
-                      limitsObservedAt: now, switcher: switchable ? .claudeSwap : nil)
+                         switchable: Bool = true) -> Account {
+        Account(identity: AccountIdentity(accountUUID: email, email: email), isActive: active,
+                fiveHour: fiveHour.map { RateLimitWindow(usedPercent: $0, windowMinutes: 300, resetsAt: fiveResets.map(now.addingTimeInterval)) },
+                sevenDay: week.map { RateLimitWindow(usedPercent: $0, windowMinutes: 10_080, resetsAt: weekResets.map(now.addingTimeInterval)) },
+                limitsObservedAt: now, switcher: switchable ? .claudeSwap : nil)
     }
 
     // MARK: Waiting
@@ -120,8 +120,8 @@ struct LimitMomentsTests {
     @Test func newNumbersAfterTheResetCountToo() {
         var tracker = LimitReturn()
         do { let seen = tracker.observe(account("a@example.com", active: true, fiveHour: 100, fiveResets: 600), at: now); #expect(!seen) }
-        let fresh = ClaudeAccount(identity: ClaudeAccountIdentity(accountUUID: "a@example.com", email: "a@example.com"), isActive: true,
-                                  fiveHour: RateLimitWindow(usedPercent: 2, windowMinutes: 300, resetsAt: now.addingTimeInterval(600 + 18_000)))
+        let fresh = Account(identity: AccountIdentity(accountUUID: "a@example.com", email: "a@example.com"), isActive: true,
+                            fiveHour: RateLimitWindow(usedPercent: 2, windowMinutes: 300, resetsAt: now.addingTimeInterval(600 + 18_000)))
         do { let seen = tracker.observe(fresh, at: now.addingTimeInterval(590)); #expect(seen, "within the grace of the reset time") }
     }
 
@@ -168,8 +168,8 @@ struct LimitMomentsTests {
 
     @Test func claudeSwapsProjectionDecidesTheWeek() throws {
         let swap = try #require(ClaudeSwapJSON.accounts(from: Data(Self.hotWeek.utf8))?.first)
-        let account = ClaudeAccount(identity: ClaudeAccountIdentity(accountUUID: "u", email: swap.email), isActive: true,
-                                    fiveHour: swap.fiveHour, sevenDay: swap.sevenDay, switcher: .claudeSwap)
+        let account = Account(identity: AccountIdentity(accountUUID: "u", email: swap.email), isActive: true,
+                              fiveHour: swap.fiveHour, sevenDay: swap.sevenDay, switcher: .claudeSwap)
         let projected = try #require(swap.projectedExhaustionAt)
         #expect(swap.willLastToReset == false)
         let out = LimitForecast.runsOut(account, projected: projected, willLastToReset: swap.willLastToReset, at: now)
@@ -182,9 +182,9 @@ struct LimitMomentsTests {
 
     @Test func theEarliestLimitWins() {
         // 5 hours: 50% after 2 h, out in 2 more. Week: 50% after 3 days, out in 3 more.
-        let account = ClaudeAccount(identity: ClaudeAccountIdentity(accountUUID: "u", email: "u@example.com"), isActive: true,
-                                    fiveHour: RateLimitWindow(usedPercent: 50, windowMinutes: 300, resetsAt: now.addingTimeInterval(3 * 3600)),
-                                    sevenDay: RateLimitWindow(usedPercent: 50, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(4 * 86_400)))
+        let account = Account(identity: AccountIdentity(accountUUID: "u", email: "u@example.com"), isActive: true,
+                              fiveHour: RateLimitWindow(usedPercent: 50, windowMinutes: 300, resetsAt: now.addingTimeInterval(3 * 3600)),
+                              sevenDay: RateLimitWindow(usedPercent: 50, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(4 * 86_400)))
         #expect(LimitForecast.runsOut(account, at: now) == now.addingTimeInterval(2 * 3600))
         var full = account
         full.fiveHour?.usedPercent = 100

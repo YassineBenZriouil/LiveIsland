@@ -12,6 +12,50 @@ struct ScannerTests {
         #expect(consumed == 8, "the unfinished line stays unread")
     }
 
+    @Test func emptyLinesAreSkippedButConsumed() {
+        let data = Fixture.data("\n\none\n\n")
+        var lines: [String] = []
+        let consumed = JSONLScanner.forEachLine(in: data) { lines.append(String(decoding: $0, as: UTF8.self)) }
+        #expect(lines == ["one"])
+        #expect(consumed == data.count)
+    }
+
+    @Test func aBufferWithoutANewlineIsLeftWhole() {
+        var calls = 0
+        #expect(JSONLScanner.forEachLine(in: Fixture.data(Fixture.claudeTitle)) { _ in calls += 1 } == 0)
+        #expect(JSONLScanner.forEachLine(in: Data()) { _ in calls += 1 } == 0)
+        #expect(calls == 0)
+    }
+
+    @Test func aLineSplitAcrossTwoReadsComesOnceWhole() {
+        // The reader appends each chunk to what's left over and drops what was consumed.
+        let line = Fixture.claudeAssistant()
+        let whole = Fixture.data(Fixture.claudeTitle + "\n" + line + "\n")
+        let cut = whole.count - line.utf8.count / 2
+        var pending = whole.prefix(cut)
+        var lines: [Data] = []
+        let first = JSONLScanner.forEachLine(in: pending) { lines.append($0) }
+        #expect(first == Fixture.claudeTitle.utf8.count + 1)
+        pending.removeSubrange(pending.startIndex..<pending.startIndex + first)
+        pending.append(whole.suffix(from: cut))
+        let second = JSONLScanner.forEachLine(in: pending) { lines.append($0) }
+        #expect(second == line.utf8.count + 1)
+        #expect(lines.map { String(decoding: $0, as: UTF8.self) } == [Fixture.claudeTitle, line])
+    }
+
+    @Test func aSliceIsReadFromItsOwnStart() {
+        // `Data` slices keep their parent's indices: lines must come from the slice, not byte 0.
+        let parent = Fixture.data("skip\none\ntwo\n")
+        let slice = parent[parent.index(parent.startIndex, offsetBy: 5)...]
+        var lines: [String] = []
+        let consumed = JSONLScanner.forEachLine(in: slice) { lines.append(String(decoding: $0, as: UTF8.self)) }
+        #expect(lines == ["one", "two"])
+        #expect(consumed == 8)
+        var marked: [String] = []
+        JSONLScanner.forEachLine(containing: ["two"], in: slice) { line, _ in marked.append(String(decoding: line, as: UTF8.self)) }
+        #expect(marked == ["two"])
+    }
+
     @Test func stringsDecodeEscapes() {
         let line = Fixture.data(Fixture.claudeTitle)
         #expect(JSONLScanner.string(after: #""aiTitle":""#, in: line) == #"Fix the "login" bug"#)
@@ -143,7 +187,7 @@ struct CodexRolloutTests {
 
     @Test func readsTheStatusLineShape() throws {
         let json = #"{"observed_at":1792801000.5,"transcript_path":"/Users/me/.claude/projects/x/s1.jsonl","rate_limits":{"five_hour":{"used_percentage":30,"resets_at":1792810000},"seven_day":{"used_percentage":47.5,"resets_at":"2026-10-24T08:00:00Z"}}}"#
-        let limits = try #require(ClaudeUsageLimits.parse(Fixture.data(json), modified: modified))
+        let limits = try #require(UsageLimits.parse(Fixture.data(json), modified: modified))
         #expect(limits.fiveHour?.usedPercent == 30)
         #expect(limits.fiveHour?.label == "5-hour")
         #expect(limits.fiveHour?.resetsAt == Date(timeIntervalSince1970: 1_792_810_000))
@@ -157,15 +201,15 @@ struct CodexRolloutTests {
 
     @Test func fallsBackToTheFileDateAndIgnoresOtherShapes() {
         let bare = #"{"model":{"id":"x"},"rate_limits":{"five_hour":{"used_percentage":12}}}"#
-        #expect(ClaudeUsageLimits.parse(Fixture.data(bare), modified: modified)?.observedAt == modified)
-        #expect(ClaudeUsageLimits.parse(Fixture.data(#"{"rate_limits":null}"#), modified: modified) == nil)
-        #expect(ClaudeUsageLimits.parse(Fixture.data(#"{"rate_limits":{}}"#), modified: modified) == nil)
-        #expect(ClaudeUsageLimits.parse(Fixture.data("not json"), modified: modified) == nil)
+        #expect(UsageLimits.parse(Fixture.data(bare), modified: modified)?.observedAt == modified)
+        #expect(UsageLimits.parse(Fixture.data(#"{"rate_limits":null}"#), modified: modified) == nil)
+        #expect(UsageLimits.parse(Fixture.data(#"{"rate_limits":{}}"#), modified: modified) == nil)
+        #expect(UsageLimits.parse(Fixture.data("not json"), modified: modified) == nil)
     }
 
     @Test func aWindowThatResetCountsFromZero() throws {
         let json = #"{"rate_limits":{"five_hour":{"used_percentage":80,"resets_at":1792801000},"seven_day":{"used_percentage":50,"resets_at":1793400000}}}"#
-        let limits = try #require(ClaudeUsageLimits.parse(Fixture.data(json), modified: modified))
+        let limits = try #require(UsageLimits.parse(Fixture.data(json), modified: modified))
         let later = limits.current(at: Date(timeIntervalSince1970: 1_792_802_000))
         #expect(later.fiveHour?.usedPercent == 0)
         #expect(later.fiveHour?.resetsAt == nil)

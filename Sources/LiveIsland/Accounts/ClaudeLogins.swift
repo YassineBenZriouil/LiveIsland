@@ -7,10 +7,10 @@ enum ClaudeLogins {
     static var configURL: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json") }
 
     /// The account Claude Code is logged in to, and its `oauthAccount` exactly as written.
-    static func active() -> (identity: ClaudeAccountIdentity, raw: Data)? {
+    static func active() -> (identity: AccountIdentity, raw: Data)? {
         guard let config = try? Data(contentsOf: configURL),
               let raw = ClaudeConfigFile.value(of: "oauthAccount", in: config),
-              let identity = ClaudeAccountIdentity.parse(raw)
+              let identity = AccountIdentity.parse(raw)
         else { return nil }
         return (identity, raw)
     }
