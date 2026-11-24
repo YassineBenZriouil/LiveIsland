@@ -26,4 +26,17 @@ public enum Ordering {
         moved.insert(moved.remove(at: index), at: target)
         return moved
     }
+
+    /// The items the person didn't hide, in order. Never none: with every one hidden the first
+    /// comes back, so the open island always has a page to show.
+    public static func shown<Item>(_ items: [Item], hidden: Set<String>, name: (Item) -> String) -> [Item] {
+        let shown = items.filter { !hidden.contains(name($0)) }
+        return shown.isEmpty ? Array(items.prefix(1)) : shown
+    }
+
+    /// `wanted` when it's shown, else the first item that is: a hidden tab is never opened,
+    /// even by an agent that needs you or a link.
+    public static func pick<Item: Equatable>(_ wanted: Item, in shown: [Item]) -> Item? {
+        shown.contains(wanted) ? wanted : shown.first
+    }
 }

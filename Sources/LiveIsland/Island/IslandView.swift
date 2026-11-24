@@ -117,7 +117,7 @@ struct CompactIsland: View {
             }
             .frame(width: IslandLayout.wingWidth - 14, height: layout.notch.height, alignment: .leading)
             .padding(.leading, 14)
-            Spacer(minLength: layout.notch.width)
+            middle
             Group {
                 if split {
                     Waveform(meter: model.levels, style: .compact,
@@ -132,7 +132,25 @@ struct CompactIsland: View {
         }
         .font(.system(size: 12, weight: .semibold, design: .rounded))
         .lineLimit(1)
+        // "Microsoft Teams" or "Needs you" shrink a little rather than lose their end.
+        .minimumScaleFactor(0.7)
         .animation(.spring(response: 0.42, dampingFraction: 0.8), value: split)
+    }
+
+    /// Where the camera would be. On a notch nothing can be drawn there; on a pill without one
+    /// it would be blank, so it names the track or the project.
+    @ViewBuilder private var middle: some View {
+        if !layout.hasNotch, let caption = activity.caption {
+            Text(caption)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.75))
+                .truncationMode(.tail)
+                .minimumScaleFactor(1)
+                .frame(width: layout.notch.width, height: layout.notch.height)
+                .privacySensitive()
+        } else {
+            Spacer(minLength: layout.notch.width)
+        }
     }
 
     /// Music playing behind an agent or a timer: like the iPhone's island with two things going

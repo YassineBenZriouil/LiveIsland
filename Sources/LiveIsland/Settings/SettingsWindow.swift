@@ -52,6 +52,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 }
 
 /// Which page the settings window shows (SwiftUI's @State needs Xcode's plugins here).
+@MainActor
 final class SettingsNavigation: ObservableObject {
     @Published var section: SettingsSection? = .general
     /// A place on the page to scroll to, once.
@@ -59,6 +60,8 @@ final class SettingsNavigation: ObservableObject {
     /// The Accounts page's tool and tab.
     @Published var accountsKind: AgentKind = .claude
     @Published var accountsTab: AccountsTab = .accounts
+    /// The Accounts page's diagnostics card, kept while the window is.
+    let diagnostics = Diagnostics()
 
     /// "codex", "console", "codex/console", "claude/automatic"…: the tool and the tab.
     /// Without a tool, a link means Claude Code's (as `settings/accounts/console` always has).
@@ -263,6 +266,7 @@ private struct GeneralPage: View {
                           isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
             }
             ShortcutSection(shortcut: model.shortcut)
+            SwitchingSetUpSection(claude: model.claudeSwap, codex: model.codexSwap)
             Section("Full screen and sharing") {
                 ToggleRow(symbol: "arrow.up.left.and.arrow.down.right", tint: .gray, title: "Hide over full-screen apps",
                           detail: "Calls and timers still show", isOn: $model.hideOverFullScreen)
@@ -351,10 +355,10 @@ private struct IslandPage: View {
                 Text("Tabs")
             } footer: {
                 HStack(alignment: .top) {
-                    Text("The island shows its tabs in this order. When nothing's going on, it opens on the first one with something to show; an agent that needs you or a call still opens its own tab.")
+                    Text("The island shows its tabs in this order. When nothing's going on, it opens on the first one with something to show; an agent that needs you or a call still opens its own tab. A tab that's off leaves the open island, and what it would have opened shows on the first tab instead.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer(minLength: 12)
-                    if model.tabOrder != IslandTab.allCases {
+                    if model.tabOrder != IslandTab.allCases || !model.hiddenTabs.isEmpty {
                         Button("Reset") { withAnimation { model.resetTabOrder() } }
                             .controlSize(.small)
                     }
@@ -439,10 +443,19 @@ private struct TabOrderRow: View {
     let count: Int
 
     var body: some View {
+        let shown = !model.hiddenTabs.contains(tab)
         HStack(spacing: 10) {
             IconBadge(symbol: tab.symbol, tint: tint, size: 26)
-            Text(tab.rawValue)
+                .opacity(shown ? 1 : 0.4)
+            Text(tab.rawValue).foregroundStyle(shown ? .primary : .secondary)
             Spacer()
+            Toggle("Show tab", isOn: Binding(get: { shown }, set: { value in withAnimation { model.setTab(tab, shown: value) } }))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                // The last tab shown stays: the open island needs a page.
+                .disabled(shown && model.visibleTabs.count == 1)
+                .help(shown ? "Shown in the open island. Turn off to leave \(tab.rawValue) out." : "Left out of the open island. Turn on to show \(tab.rawValue).")
             Button { withAnimation { model.moveTab(tab, by: -1) } } label: {
                 Image(systemName: "chevron.up").frame(width: 22, height: 22).contentShape(Rectangle())
             }
@@ -727,7 +740,7 @@ private struct SoftwareUpdatePage: View {
                     }
                     HStack {
                         // After a failure the same button tries again, and the page is where to get it by hand.
-                        Button("Update Now") { Task { await updater.install() } }.glassButton(prominent: true)
+                        Button(isFailed ? "Try Again" : "Update Now") { Task { await updater.install() } }.glassButton(prominent: true)
                         Link(isFailed ? "Open Release Page" : "Release Notes", destination: release.page).font(.system(size: 12))
                         Spacer()
                         if release.size > 0 {
@@ -847,19 +860,47 @@ private struct AboutUpdateLine: View {
     }
 }
 
-/// Times for accounts, with their time zone, so a reset isn't misread.
+/// Times for accounts, with their time zone, so a reset isn't misread, in the person's own
+/// 12- or 24-hour clock. The formatters are kept (they're asked for on every redraw) and made
+/// again when the clock setting, the language or the time zone changes.
 enum TaskTime {
-    static func text(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm zzz" : "EEE d MMM, HH:mm zzz"
-        return formatter.string(from: date)
-    }
+    private static let format: TaskTimeFormat = {
+        let format = TaskTimeFormat()
+        for name in [NSLocale.currentLocaleDidChangeNotification, .NSSystemTimeZoneDidChange] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in format.reset() }
+        }
+        return format
+    }()
+
+    /// "15:40 CET" today, "Wed 3 Dec, 15:40 CET" another day.
+    static func text(_ date: Date) -> String { format.text(date) }
 
     /// For the island, where there's little room: "23:56", or "Wed 03:40" on another day.
-    static func short(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "EEE HH:mm"
-        return formatter.string(from: date)
+    static func short(_ date: Date) -> String { format.short(date) }
+}
+
+/// While neither switcher is installed: what they do, and the way to set one up. It goes
+/// once claude-swap or ccswap is there.
+private struct SwitchingSetUpSection: View {
+    @EnvironmentObject private var model: IslandModel
+    @ObservedObject var claude: ClaudeSwapController
+    @ObservedObject var codex: CodexSwapController
+
+    var body: some View {
+        if claude.executable == nil && codex.executable == nil {
+            Section("Accounts") {
+                HStack(spacing: 10) {
+                    IconBadge(symbol: SettingsSection.accounts.symbol, tint: SettingsSection.accounts.tint, size: 26)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Switch Claude Code and Codex accounts")
+                        Text("By hand from the island, or before one runs out. One click installs the switcher and adds the account you use now.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Set Up Account Switching") { model.openSettings(.accounts) }.glassButton(prominent: true)
+                }
+            }
+        }
     }
 }
 

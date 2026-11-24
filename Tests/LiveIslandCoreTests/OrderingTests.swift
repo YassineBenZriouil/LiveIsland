@@ -38,3 +38,31 @@ struct OrderingTests {
         #expect(Ordering.move(tabs, from: 9, by: -1) == tabs)
     }
 }
+
+@Suite("Hidden tabs")
+struct HiddenTabsTests {
+    let tabs = ["Media", "Agents", "Activity", "Accounts"]
+
+    @Test func leavesOutTheHiddenOnesInOrder() {
+        #expect(Ordering.shown(tabs, hidden: ["Accounts", "Media"], name: { $0 }) == ["Agents", "Activity"])
+    }
+
+    @Test func showsEverythingWhenNothingIsHidden() {
+        #expect(Ordering.shown(tabs, hidden: [], name: { $0 }) == tabs)
+    }
+
+    @Test func neverLeavesTheIslandWithoutAPage() {
+        #expect(Ordering.shown(tabs, hidden: Set(tabs), name: { $0 }) == ["Media"])
+    }
+
+    @Test func ignoresNamesItDoesNotKnow() {
+        #expect(Ordering.shown(tabs, hidden: ["Weather"], name: { $0 }) == tabs)
+    }
+
+    @Test func opensTheFirstShownTabInsteadOfAHiddenOne() {
+        let shown = ["Agents", "Activity"]
+        #expect(Ordering.pick("Agents", in: shown) == "Agents")
+        #expect(Ordering.pick("Accounts", in: shown) == "Agents")
+        #expect(Ordering.pick("Media", in: [String]()) == nil)
+    }
+}

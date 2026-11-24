@@ -54,6 +54,25 @@ public enum IslandActivity: Equatable, Sendable {
         }
     }
 
+    /// A few words for the middle of a pill on a display without a notch, where the camera
+    /// would be: the track, the project, the event or the app. nil when the wings say it all.
+    public var caption: String? {
+        let text: String?
+        switch self {
+        case .nowPlaying(let title, _): text = title
+        case .agentNeedsYou(_, let project), .agentDone(_, let project), .agentWorking(_, let project, _): text = project
+        case .eventSoon(let title, _): text = title
+        case .call(let app, _): text = app
+        case .headphonesConnected(let name, _): text = name
+        case .accountSwitched(let to): text = to
+        case .accountLimit(let account, _): text = account
+        case .limitReset(_, let account), .limitWaiting(_, let account, _), .limitForecast(_, let account, _): text = account
+        case .timerFinished, .timer, .charging, .lowBattery, .cameraOn, .microphoneOn: text = nil
+        }
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
     public static func mostImportant(_ activities: [IslandActivity]) -> IslandActivity? {
         // Stable: among equals, the earlier one in the list wins.
         activities.enumerated().max { lhs, rhs in

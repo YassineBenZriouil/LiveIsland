@@ -33,6 +33,17 @@ struct AccountsPage: View {
                     Text("No accounts yet").font(.system(size: 13, weight: .semibold))
                     Text("Use Claude Code or Codex once and the account shows up here. Log in to more with /login or codex login.")
                         .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).multilineTextAlignment(.center)
+                    if model.hasNoSwitcher {
+                        Button { model.openSettings(.accounts) } label: {
+                            Label("Set Up Account Switching", systemImage: "arrow.left.arrow.right")
+                                .font(.system(size: 11, weight: .semibold)).padding(.horizontal, 12).frame(height: 26)
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(PressableStyle())
+                        .liquidGlass(in: Capsule(), tint: Color.purple.opacity(0.35), interactive: true)
+                        .padding(.top, 4)
+                        .help("claude-swap and ccswap switch accounts, by hand or before one runs out")
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {

@@ -177,6 +177,7 @@ extension CodexSwapController: SwapTool {
 // MARK: - One tool's page
 
 private struct SwapToolPage<Tool: SwapTool, Banners: View, Accounts: View, ConsoleActions: View>: View {
+    @EnvironmentObject private var model: IslandModel
     @EnvironmentObject private var navigation: SettingsNavigation
     @ObservedObject var tool: Tool
     let kind: AgentKind
@@ -201,6 +202,7 @@ private struct SwapToolPage<Tool: SwapTool, Banners: View, Accounts: View, Conso
                                 accounts
                                 AddAccountCard(tool: tool)
                             }
+                            diagnostics
                         }
                         .padding(.bottom, 8)
                     }
@@ -212,7 +214,12 @@ private struct SwapToolPage<Tool: SwapTool, Banners: View, Accounts: View, Conso
                     ConsoleTab(tool: tool) { consoleActions }
                 }
             } else {
-                ScrollView { SetUpCard(tool: tool, kind: kind, signedIn: signedIn) }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        SetUpCard(tool: tool, kind: kind, signedIn: signedIn)
+                        diagnostics
+                    }
+                }
             }
         }
         .onAppear { tool.isVisible = true }
@@ -222,6 +229,10 @@ private struct SwapToolPage<Tool: SwapTool, Banners: View, Accounts: View, Conso
     private var isRunning: Bool {
         if case .running = tool.auto { return true }
         return false
+    }
+
+    private var diagnostics: some View {
+        DiagnosticsCard(diagnostics: navigation.diagnostics, claude: model.claudeSwap, codex: model.codexSwap)
     }
 }
 
@@ -346,7 +357,7 @@ private struct SetUpCard<Tool: SwapTool>: View {
                           detail: signedIn != nil ? "The account \(kind.displayName) uses now" : "Sign in to \(kind.displayName) first, or add accounts afterwards with Sign In…")
             }
             HStack(spacing: 10) {
-                Button(tool.entries.contains(where: \.isError) ? "Try Again" : "Install and Set Up") { Task { await tool.install() } }
+                Button(lastFailed ? "Try Again" : "Install and Set Up") { Task { await tool.install() } }
                     .glassButton(prominent: true)
                     .controlSize(.large)
                     .disabled(tool.busy != nil)
@@ -373,6 +384,12 @@ private struct SetUpCard<Tool: SwapTool>: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(Card())
+    }
+
+    /// Whether the last command or note failed: an error earlier, followed by something that
+    /// worked, no longer asks to try again. Automatic switching's events don't count.
+    private var lastFailed: Bool {
+        tool.entries.last(where: { $0.kind != .event && !$0.isRunning })?.isError == true
     }
 
     private var uvState: SetUpStep.State {
@@ -586,9 +603,21 @@ private struct AddAccountCard<Tool: SwapTool>: View {
             }
             if let adding = tool.adding {
                 HStack(spacing: 6) {
-                    ProgressView().controlSize(.small); Text(adding).font(.system(size: 11)).foregroundStyle(.secondary)
-                    if tool.canCancelAdding { Button("Cancel") { tool.cancelAdding() }.buttonStyle(.link).font(.system(size: 11)) }
+                    ProgressView().controlSize(.small)
+                    Text(adding).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                    Spacer(minLength: 6)
+                    // Closing Terminal doesn't end the wait: this does, at once.
+                    if tool.canCancelAdding {
+                        Button("Cancel") { tool.cancelAdding() }.controlSize(.small)
+                            .help("Stop waiting for this sign-in")
+                    }
                 }
+            } else if let outcome = SignInOutcome.latest(in: tool.entries) {
+                Label(outcome.text, systemImage: outcome.isError ? "exclamationmark.triangle.fill" : outcome.isCancelled ? "xmark.circle" : "checkmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(outcome.isError ? Color.orange : outcome.isCancelled ? .secondary : .green)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .privacySensitive()
             }
             Text(tool.info.signInHelp).font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -603,6 +632,28 @@ private struct AddAccountCard<Tool: SwapTool>: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.primary.opacity(0.14), style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
+    }
+}
+
+/// How the last sign-in ended, read from the console's notes, shown under Sign In… for a few
+/// minutes: "Added Work to claude-swap.", a failure, or the person's own Cancel.
+struct SignInOutcome {
+    let text: String
+    let isError: Bool
+    let isCancelled: Bool
+
+    /// How long the line stays.
+    static let shownFor: TimeInterval = 300
+
+    static func latest(in entries: [ClaudeSwapController.Entry], now: Date = Date()) -> SignInOutcome? {
+        guard let entry = entries.last(where: { $0.kind == .note }), now.timeIntervalSince(entry.at) < shownFor else { return nil }
+        let title = entry.title
+        if title.hasPrefix("Added \u{201C}") { return SignInOutcome(text: title, isError: false, isCancelled: false) }
+        if title.hasPrefix("Stopped") { return SignInOutcome(text: title, isError: false, isCancelled: true) }
+        if title.contains("couldn't add \u{201C}") || title.contains("wasn't signed in within") {
+            return SignInOutcome(text: title, isError: true, isCancelled: false)
+        }
+        return nil
     }
 }
 
