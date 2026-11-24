@@ -102,6 +102,18 @@ final class IslandModel: ObservableObject {
     @Published var hoverDelay: Double { didSet { defaults.set(hoverDelay, forKey: Key.hoverDelay) } }
     @Published var ambientGlow: Bool { didSet { save(ambientGlow, Key.glow) } }
     @Published var agentSounds: Bool { didSet { save(agentSounds, Key.sounds) } }
+    /// Send a notification when an agent needs the person and the island can't be seen. Off
+    /// until the person turns it on; turning it on asks macOS for permission.
+    @Published var notifyWhenHidden: Bool {
+        didSet {
+            save(notifyWhenHidden, Key.notify)
+            if notifyWhenHidden { askToNotify() }
+        }
+    }
+    /// macOS said no to notifications (or LiveIsland's are off in System Settings).
+    @Published private(set) var notificationsDenied = false
+    /// Hidden over a full-screen app right now, as the island's window last said.
+    private(set) var islandHidden = false
     /// Whether LiveIsland asks GitHub once a day for a newer version (it never installs on its own).
     @Published var checkForUpdates: Bool {
         didSet {
@@ -171,6 +183,7 @@ final class IslandModel: ObservableObject {
     /// first timer's alert can't clear the second.
     private var timerAlertWork: DispatchWorkItem?
     private let screen = ScreenWatcher()
+    private let notifier = AgentNotifier()
     private var transientWork: DispatchWorkItem?
     private var clockTimer: Timer?
     private var playerRefresh: Timer?
@@ -193,6 +206,7 @@ final class IslandModel: ObservableObject {
         hoverDelay = defaults.double(forKey: Key.hoverDelay)
         ambientGlow = defaults.bool(forKey: Key.glow)
         agentSounds = defaults.bool(forKey: Key.sounds)
+        notifyWhenHidden = defaults.bool(forKey: Key.notify)
         liveWaveform = defaults.bool(forKey: Key.waveform)
         checkForUpdates = defaults.bool(forKey: Key.updates)
         tabOrder = Ordering.restore(defaults.stringArray(forKey: Key.tabOrder) ?? [], all: IslandTab.allCases, name: \.rawValue)
@@ -232,6 +246,11 @@ final class IslandModel: ObservableObject {
         scripted.onQueue = { [weak self] in self?.upNext = $0 }
         volume.onChange = { [weak self] in self?.output = $0 }
         agentMonitor.onUpdate = { [weak self] in self?.receive($0) }
+        notifier.onOpen = { [weak self] id in
+            guard let self, let session = self.agents.sessions.first(where: { $0.id == id }) else { return }
+            self.jump(to: session)
+        }
+        if notifyWhenHidden { askToNotify() }
         systemMonitor.onUpdate = { [weak self] in self?.system = $0 }
         systemMonitor.onEvent = { [weak self] in self?.flash($0) }
         calendar.onUpdate = { [weak self] in self?.events = $0 }
@@ -435,7 +454,23 @@ final class IslandModel: ObservableObject {
             }
         }
         agents = next
+        notifier.observe(sessions, enabled: notifyWhenHidden && showAgents, unseen: islandHidden || isScreenAway,
+                         hidingDetails: hidesDetails)
         accountsMonitor.observe(limits: next.claudeLimits, notice: next.claudeLimit, codexLimits: next.codexLimits)
+    }
+
+    /// The island's window says when it hides over a full-screen app (and shows again).
+    func setIslandHidden(_ hidden: Bool) {
+        islandHidden = hidden
+    }
+
+    /// Asks for permission to notify; a "no" turns the setting back off and says why in Settings.
+    private func askToNotify() {
+        notifier.requestPermission { [weak self] granted in
+            guard let self else { return }
+            if self.notificationsDenied == granted { self.notificationsDenied = !granted }
+            if !granted, self.notifyWhenHidden { self.notifyWhenHidden = false }
+        }
     }
 
     // MARK: - Claude accounts
@@ -836,6 +871,7 @@ final class IslandModel: ObservableObject {
         static let hoverDelay = "hoverDelay"
         static let glow = "ambientGlow"
         static let sounds = "agentSounds"
+        static let notify = "notifyAgentsWhenHidden"
         static let players = "controlPlayers"
         static let waveform = "liveWaveform"
         static let tabOrder = "tabOrder"

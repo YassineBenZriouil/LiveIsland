@@ -796,6 +796,7 @@ private struct AgentRow: View {
                 Text(session.project).font(.system(size: 13, weight: .semibold)).lineLimit(1).privacySensitive()
                 Text(session.title ?? session.kind.displayName).privacySensitive()
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                if let request = session.request { RequestLine(request: request) }
             }
             Spacer(minLength: 6)
             StateChip(session: session)
@@ -841,6 +842,27 @@ private struct AgentRow: View {
     }
 }
 
+/// What the agent waits on the person for: the command it wants to run, the file it wants to
+/// change, or its question, so "Needs you" can be answered without going to look first. It's
+/// cut to two lines (the summary is already one short line, `AgentRequest.maxLength`) and
+/// blurs while the screen is shared: commands and questions can say a lot about the work.
+private struct RequestLine: View {
+    let request: AgentRequest
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: request.symbol).font(.system(size: 9, weight: .semibold))
+            Text(request.text).privacySensitive()
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.yellow.opacity(0.9))
+        .padding(.top, 1)
+    }
+}
+
 private struct StateChip: View {
     let session: AgentSession
 
@@ -854,6 +876,9 @@ private struct StateChip: View {
                 }
             case .waiting:
                 Chip(text: "Needs you", color: .yellow)
+            case .done where session.request?.kind == .question:
+                // The turn ended on a question: it's the person's move, not finished work.
+                Chip(text: "Asks you", color: .yellow)
             case .done:
                 Chip(text: "Done", color: .green)
             case .idle:

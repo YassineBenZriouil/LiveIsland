@@ -148,13 +148,29 @@ struct CompactIsland: View {
     /// The activity's detail, short enough to sit beside its icon in the left wing.
     @ViewBuilder private var status: some View {
         switch activity {
+        case .agentDone(let kind, let project) where request(kind, project)?.kind == .question:
+            Image(systemName: "questionmark.bubble.fill").foregroundStyle(.yellow)
         case .agentDone:
             Image(systemName: "checkmark").font(.system(size: 12, weight: .heavy)).foregroundStyle(.green)
-        case .agentNeedsYou:
-            Image(systemName: "hand.raised.fill").foregroundStyle(.yellow).symbolEffect(.pulse)
+        case .agentNeedsYou(let kind, let project):
+            Image(systemName: request(kind, project)?.symbol ?? "hand.raised.fill").foregroundStyle(.yellow).symbolEffect(.pulse)
         default:
             trailing
         }
+    }
+
+    /// What the agent behind the activity waits on the person for, from its session. Two
+    /// sessions of one project share an activity; the first that asks something speaks for it.
+    private func request(_ kind: AgentKind, _ project: String) -> AgentRequest? {
+        model.sessions.first { $0.kind == kind && $0.project == project && $0.request != nil }?.request
+    }
+
+    /// The wing's short word for a request: the tool ("Bash?") or "Question". While details
+    /// are hidden (the screen is shared) it stays "Needs you", since even a tool name says
+    /// something about the work.
+    private func label(for request: AgentRequest?) -> String {
+        guard let request, !model.hidesDetails else { return "Needs you" }
+        return request.compactLabel
     }
 
     /// Changes in detail (a clock ticking) keep the identity; a different activity animates in.
@@ -231,12 +247,15 @@ struct CompactIsland: View {
                 Text(Format.clock(model.timer?.remaining(at: context.date) ?? endsAt.timeIntervalSince(context.date)))
                     .foregroundStyle(.orange).monospacedDigit()
             }
-        case .agentNeedsYou:
-            Text("Needs you").foregroundStyle(.yellow)
+        case .agentNeedsYou(let kind, let project):
+            Text(label(for: request(kind, project))).foregroundStyle(.yellow).minimumScaleFactor(0.75)
         case .accountLimit:
             Text("Switch").foregroundStyle(.orange)
         case .accountSwitched:
             Text("Switched").foregroundStyle(.green)
+        case .agentDone(let kind, let project) where request(kind, project)?.kind == .question:
+            // The turn ended on a question: the person's move, not finished work.
+            Text("Asks you").foregroundStyle(.yellow).minimumScaleFactor(0.75)
         case .agentDone:
             Label("Done", systemImage: "checkmark").labelStyle(.titleAndIcon).foregroundStyle(.green)
         case .agentWorking(_, _, let since):
