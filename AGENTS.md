@@ -16,7 +16,7 @@ LiveIsland is a macOS app (Swift, SwiftUI + AppKit, no package dependencies) tha
 | `Sources/LiveIsland/App/` | `IslandModel` (all state, settings, what wins the notch), app entry, `liveisland://` links |
 | `Sources/LiveIsland/Island/` | The panel window, compact and expanded island views, glass helpers |
 | `Sources/LiveIsland/Settings/` | Settings window (`AccountsSettings`: one Accounts page for claude-swap and ccswap, with Accounts, Automatic and Console tabs), and the menu bar panel |
-| `Sources/LiveIsland/Support/` | Process running, login item, artwork colors, Claude Code status line setup, `Updater` (Software Update) |
+| `Sources/LiveIsland/Support/` | Process running, login item, artwork colors, Claude Code status line setup, `Updater` (Software Update), `HotKey` (the global shortcut, `IslandShortcut`) |
 | `ThirdParty/mediaremote-adapter/` | Vendored now-playing adapter (BSD-3-Clause, see `UPSTREAM_COMMIT`); keep its license |
 | `Tests/LiveIslandCoreTests/` | Swift Testing suites for `LiveIslandCore`; `RealDataBenchmark` is opt-in |
 | `demo/` | README media (see "Demo media" below) |
