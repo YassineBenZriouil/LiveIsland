@@ -271,7 +271,7 @@ private struct StatusCard<Tool: SwapTool>: View {
                         Task { await tool.upgrade() }
                     }
                     if let url = URL(string: tool.info.repository) {
-                        Button("\(tool.info.name) on GitHub") { NSWorkspace.shared.open(url) }
+                        Button("\(tool.info.name) on GitHub") { NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle").font(.system(size: 15))
@@ -367,7 +367,7 @@ private struct SetUpCard<Tool: SwapTool>: View {
                     Text(busy).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("About \(info.name)") { if let url = URL(string: info.repository) { NSWorkspace.shared.open(url) } }
+                Button("About \(info.name)") { if let url = URL(string: info.repository) { NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) } }
                     .buttonStyle(.link).font(.system(size: 12))
             }
             if !tool.entries.isEmpty {

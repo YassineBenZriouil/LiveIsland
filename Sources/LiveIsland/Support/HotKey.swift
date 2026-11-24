@@ -176,7 +176,8 @@ extension IslandModel {
     /// in front keeps the keyboard.
     func shortcutPressed() {
         guard !isMovingIsland else { return }
-        switch ShortcutPress.step(isOpen: isExpanded, current: tab, tabs: tabOrder) {
+        // Hidden tabs are skipped, as in the tab bar.
+        switch ShortcutPress.step(isOpen: isExpanded, current: tab, tabs: visibleTabs) {
         case .open: expand()
         case .show(let next): tab = next
         case .close: collapse()

@@ -73,10 +73,12 @@ final class AgentNotifier: NSObject, UNUserNotificationCenterDelegate {
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
+        // Read here: the response itself isn't Sendable, so only its strings cross to the main thread.
         let id = response.notification.request.content.userInfo[Self.sessionKey] as? String
+        let opened = response.actionIdentifier == UNNotificationDefaultActionIdentifier
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                if let id, response.actionIdentifier == UNNotificationDefaultActionIdentifier { self.onOpen?(id) }
+                if let id, opened { self.onOpen?(id) }
             }
         }
         completionHandler()
