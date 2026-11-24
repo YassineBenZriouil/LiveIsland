@@ -27,17 +27,3 @@ extension View {
         }
     }
 }
-
-/// Groups floating glass elements so they blend and morph together on macOS 26 and later.
-struct GlassGroup<Content: View>: View {
-    var spacing: CGFloat = 8
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        if #available(macOS 26, *) {
-            GlassEffectContainer(spacing: spacing) { content }
-        } else {
-            content
-        }
-    }
-}

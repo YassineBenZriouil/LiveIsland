@@ -430,14 +430,6 @@ public struct AccountBook: Codable, Equatable, Sendable {
             }
         }
     }
-
-    public mutating func remove(_ key: String) {
-        guard key != activeKey else {
-            entries[key]?.hasSavedLogin = false
-            return
-        }
-        entries[key] = nil
-    }
 }
 
 /// An account as the island shows it, whatever it came from.

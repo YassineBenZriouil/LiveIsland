@@ -143,12 +143,6 @@ struct AccountTests {
         #expect(fromNewSession)
         #expect(book.entries[b.key]?.fiveHour?.usedPercent == 3)
         #expect(book.entries[a.key]?.fiveHour?.usedPercent == 100)
-
-        book.remove(a.key)
-        #expect(book.entries[a.key] == nil)
-        book.entries[b.key]?.hasSavedLogin = true
-        book.remove(b.key)
-        #expect(book.entries[b.key]?.hasSavedLogin == false, "the active account stays, without its saved login")
     }
 
     @Test func anExhaustedAccountShowsItsLimitFromTheRefusal() throws {

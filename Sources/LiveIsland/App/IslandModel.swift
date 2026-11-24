@@ -361,9 +361,6 @@ final class IslandModel: ObservableObject {
     /// Whether neither claude-swap nor ccswap is installed, for the "set up switching" buttons.
     var hasNoSwitcher: Bool { claudeSwap.executable == nil && codexSwap.executable == nil }
 
-    func dismissWelcome() {
-        showsWelcome = false
-    }
 
     func stop() {
         media.stop()
@@ -704,10 +701,6 @@ final class IslandModel: ObservableObject {
         account.kind == .claude ? account.identity.displayName : account.identity.email
     }
 
-    func forgetAccount(_ account: Account) {
-        accountsMonitor.forget(account)
-    }
-
     func installStatusLine() {
         do {
             _ = try ClaudeStatusLine.install()
@@ -848,10 +841,6 @@ final class IslandModel: ObservableObject {
         hoverWork = work
         // Open quickly, close a little later, so passing the mouse by doesn't flicker it.
         DispatchQueue.main.asyncAfter(deadline: .now() + (hovering ? max(hoverDelay, dwell) : 0.35), execute: work)
-    }
-
-    func toggleExpanded() {
-        isExpanded ? collapse() : expand()
     }
 
     func expand(on requested: IslandTab? = nil) {

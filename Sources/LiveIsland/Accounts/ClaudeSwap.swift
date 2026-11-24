@@ -71,7 +71,7 @@ final class ClaudeSwapController: ObservableObject {
     private var autoProcess: Process?
     private var autoStartedAt: Date?
     private var autoBuffer = Data()
-    private var backoff = AutoRestartBackoff()
+    private var backoff = RestartBackoff()
     private var restartWork: DispatchWorkItem?
     private var refreshTimer: Timer?
     private var stopping = false

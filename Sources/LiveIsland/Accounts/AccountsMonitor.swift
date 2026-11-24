@@ -97,13 +97,6 @@ final class AccountsMonitor {
         publish(next)
     }
 
-    /// Forgets an account LiveIsland saw: its row. The active account stays listed.
-    func forget(_ account: Account) {
-        queue.async { [weak self, worker] in
-            worker.forget(account)
-            DispatchQueue.main.async { self?.refresh() }
-        }
-    }
 
     private func publish(_ next: Snapshot) {
         guard next != snapshot else { return }
@@ -184,16 +177,6 @@ private final class Worker: @unchecked Sendable {
                 CodexAccounts.merge(book: codexBook, ccswap: input.ccswap, now: now))
     }
 
-    func forget(_ account: Account) {
-        let key = account.identity.key
-        if account.kind == .codex {
-            codexBook.remove(key)
-            save(codexBook, as: "codex")
-        } else {
-            book.remove(key)
-            save(book, as: "claude")
-        }
-    }
 
     /// Notes the account Codex is logged in to, when its login file changes.
     private func followCodex(now: Date) {

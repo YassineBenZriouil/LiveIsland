@@ -39,11 +39,6 @@ enum ClaudeCLI {
         environment["PATH"] = shellPath
         return environment
     }
-
-    /// Where Claude Code keeps conversations.
-    static var projectsDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
-    }
 }
 
 /// The shell's PATH, read and written from any thread.

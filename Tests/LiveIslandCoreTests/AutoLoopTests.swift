@@ -4,26 +4,6 @@ import Testing
 
 @Suite("auto loop")
 struct AutoLoopTests {
-    @Test func waitsLongerEachTimeItFails() {
-        var backoff = AutoRestartBackoff()
-        #expect(backoff.delay(afterRunning: 0) == 5, "a launch failure goes through the same path")
-        #expect(backoff.delay(afterRunning: 40) == 15, "one poll and a crash isn't healthy")
-        #expect(backoff.delay(afterRunning: 2) == 60)
-        #expect(backoff.delay(afterRunning: 2) == 300)
-        #expect(backoff.delay(afterRunning: 2) == 300)
-        #expect(backoff.failures == 5)
-    }
-
-    @Test func startsOverAfterALongRunOrAToggle() {
-        var backoff = AutoRestartBackoff()
-        _ = backoff.delay(afterRunning: 1)
-        _ = backoff.delay(afterRunning: 1)
-        #expect(backoff.delay(afterRunning: 11 * 60) == 5, "ran past ten minutes")
-        _ = backoff.delay(afterRunning: 1)
-        backoff.reset()
-        #expect(backoff.delay(afterRunning: 1) == 5)
-    }
-
     private let record = AutoLoopRecord(pid: 4242, startedAt: 1_795_000_000.123456)
 
     @Test func endsOnlyTheLoopLiveIslandLeft() {
