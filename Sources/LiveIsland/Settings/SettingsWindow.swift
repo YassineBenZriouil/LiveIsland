@@ -494,6 +494,13 @@ private struct AgentsSettingsPage: View {
                 agentToggle(.codex, detail: "Sessions from ~/.codex/sessions", isOn: $model.showCodex)
                 ToggleRow(symbol: "speaker.wave.2.fill", tint: .pink, title: "Play a sound",
                           detail: "When an agent finishes, or stops to ask you something", isOn: $model.agentSounds)
+                ToggleRow(symbol: "bell.badge.fill", tint: .red, title: "Notify when the island is hidden",
+                          detail: "When an agent needs you over a full-screen app or while the screen is locked. Focus decides when it shows.",
+                          isOn: $model.notifyWhenHidden)
+                if model.notificationsDenied {
+                    Label("Notifications are off for LiveIsland. Allow them in System Settings › Notifications.",
+                          systemImage: "exclamationmark.triangle.fill").font(.system(size: 12)).foregroundStyle(.orange)
+                }
             }
             AccountsShortcutSection()
             Section {
