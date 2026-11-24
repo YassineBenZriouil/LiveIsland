@@ -56,7 +56,7 @@ final class ScriptedPlayers {
     private(set) var players: [String: NowPlaying] = [:]
     private var queues: [String: [QueueItem]] = [:]
 
-    private let queue = DispatchQueue(label: "com.aissam.liveisland.players", qos: .userInitiated)
+    private let queue = AppleScriptQueue.shared
     /// Compiled once: compiling is most of what an AppleScript query costs.
     private let scripts = ScriptCache()
     private var observers: [NSObjectProtocol] = []
@@ -286,7 +286,7 @@ final class ScriptedPlayers {
     }
 }
 
-/// Compiled AppleScripts by source. Used only on the players queue.
+/// Compiled AppleScripts by source. Used only on the AppleScript queue.
 private final class ScriptCache: @unchecked Sendable {
     private var compiled: [String: NSAppleScript] = [:]
 
