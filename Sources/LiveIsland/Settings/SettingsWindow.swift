@@ -234,6 +234,7 @@ private struct GeneralPage: View {
                 ToggleRow(symbol: "power", tint: .green, title: "Open at login",
                           isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
             }
+            ShortcutSection(shortcut: model.shortcut)
             Section("Full screen and sharing") {
                 ToggleRow(symbol: "arrow.up.left.and.arrow.down.right", tint: .gray, title: "Hide over full-screen apps",
                           detail: "Calls and timers still show", isOn: $model.hideOverFullScreen)
@@ -257,6 +258,44 @@ private struct GeneralPage: View {
                 Text("Links")
             }
         }
+    }
+}
+
+/// The global shortcut: on or off, and a recorder for picking other keys.
+private struct ShortcutSection: View {
+    @ObservedObject var shortcut: IslandShortcut
+
+    var body: some View {
+        Section("Keyboard") {
+            ToggleRow(symbol: "keyboard", tint: .purple, title: "Keyboard shortcut",
+                      detail: "Opens the island from any app. Press again for the next tab; after the last one it closes.",
+                      isOn: $shortcut.isEnabled)
+            LabeledContent {
+                HStack(spacing: 8) {
+                    Button { shortcut.isRecording ? shortcut.stopRecording() : shortcut.startRecording() } label: {
+                        Text(shortcut.isRecording ? "Type a shortcut…" : shortcut.shortcut.display)
+                            .monospacedDigit().frame(minWidth: 120)
+                    }
+                    .help(shortcut.isRecording ? "Press keys with ⌘, ⌃ or ⌥, or Escape to cancel" : "Click, then press the new shortcut")
+                    if shortcut.shortcut != .standard {
+                        Button("Reset") { shortcut.reset() }
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    IconBadge(symbol: "command", tint: .gray, size: 26)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Shortcut")
+                        if shortcut.isTaken {
+                            Text("Another app uses this shortcut. Pick another one.")
+                                .font(.system(size: 11)).foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+            .disabled(!shortcut.isEnabled)
+        }
+        .onDisappear { shortcut.stopRecording() }
     }
 }
 
