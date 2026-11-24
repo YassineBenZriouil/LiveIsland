@@ -278,6 +278,7 @@ private struct StatusCard<Tool: SwapTool>: View {
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .help("Update \(tool.info.name), or open its page")
+                .accessibilityLabel("More for \(tool.info.name)")
             }
         }
         .padding(14)
@@ -290,7 +291,7 @@ private struct StatusCard<Tool: SwapTool>: View {
 
     private var summary: String {
         guard tool.executable != nil else { return "Not installed yet" }
-        let count = tool.accountCount.map { "\($0) account\($0 == 1 ? "" : "s")" } ?? "Reading accounts…"
+        let count = tool.accountCount.map { Spoken.count($0, "account", "accounts") } ?? "Reading accounts…"
         let active = tool.activeName.map { " · on \($0)" } ?? ""
         let auto: String
         switch tool.auto {
@@ -424,6 +425,8 @@ private struct SetUpStep: View {
             }
             .font(.system(size: 15))
             .frame(width: 18, height: 18)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(state == .done ? "Done" : state == .running ? "In progress" : "To do")
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.system(size: 12.5, weight: .medium))
                 Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -455,6 +458,7 @@ private struct TabStrip: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(3)
@@ -486,6 +490,9 @@ private struct ProviderSwitch: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(kind.displayName)
+                .accessibilityValue(Spoken.count(counts[kind] ?? 0, "account", "accounts"))
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(3)
@@ -541,6 +548,7 @@ private struct AccountCard<Menu: View>: View {
                 SwiftUI.Menu { menu } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .frame(width: 22)
+                    .accessibilityLabel("More for this account")
             }
             HStack(spacing: 18) {
                 if windows.isEmpty {
@@ -628,6 +636,7 @@ private struct AddAccountCard<Tool: SwapTool>: View {
                     .disabled((tool.accountCount ?? 0) < 2 || tool.busy != nil)
                 Button { Task { await tool.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless).help("Ask \(tool.info.name) again")
+                    .accessibilityLabel("Refresh")
             }
         }
         .padding(14)
@@ -710,7 +719,8 @@ private struct CodexBanners: View {
 
     var body: some View {
         if swap.legacyLogins > 0, ProcessInfo.processInfo.environment["LIVEISLAND_CCSWAP"] == nil {
-            Banner(symbol: "key.fill", tint: .blue, title: "\(swap.legacyLogins) saved Codex login\(swap.legacyLogins == 1 ? "" : "s") from an earlier version",
+            Banner(symbol: "key.fill", tint: .blue, title: Spoken.plural(swap.legacyLogins, one: "1 saved Codex login from an earlier version",
+                                         other: "\(swap.legacyLogins) saved Codex logins from an earlier version"),
                    text: "ccswap does the switching now: add them to it, then delete LiveIsland's copies.") {
                 Button("Add to ccswap") { Task { await swap.importLegacyLogins() } }.disabled(swap.busy != nil)
                 Button("Delete…") {
@@ -844,7 +854,7 @@ private struct CodexCards: View {
     private func note(_ account: CodexSwapAccount) -> (String, Bool)? {
         if account.needsLogin { return ("Its login stopped working: sign in to it again, then add it.", true) }
         if let error = account.usageError { return ("Couldn't read its usage: \(error)", true) }
-        if let banked = account.bankedResets, banked > 0 { return ("\(banked) banked reset\(banked == 1 ? "" : "s") to redeem, from its menu", false) }
+        if let banked = account.bankedResets, banked > 0 { return (Spoken.plural(banked, one: "1 banked reset to redeem, from its menu", other: "\(banked) banked resets to redeem, from its menu"), false) }
         return nil
     }
 }

@@ -359,7 +359,7 @@ private struct IslandPage: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer(minLength: 12)
                     if model.tabOrder != IslandTab.allCases || !model.hiddenTabs.isEmpty {
-                        Button("Reset") { withAnimation { model.resetTabOrder() } }
+                        Button("Reset") { withAnimation(Motion.animation(.default)) { model.resetTabOrder() } }
                             .controlSize(.small)
                     }
                 }
@@ -447,25 +447,27 @@ private struct TabOrderRow: View {
         HStack(spacing: 10) {
             IconBadge(symbol: tab.symbol, tint: tint, size: 26)
                 .opacity(shown ? 1 : 0.4)
-            Text(tab.rawValue).foregroundStyle(shown ? .primary : .secondary)
+            Text(tab.label).foregroundStyle(shown ? .primary : .secondary)
             Spacer()
-            Toggle("Show tab", isOn: Binding(get: { shown }, set: { value in withAnimation { model.setTab(tab, shown: value) } }))
+            Toggle("Show \(tab.label) tab", isOn: Binding(get: { shown }, set: { value in withAnimation(Motion.animation(.default)) { model.setTab(tab, shown: value) } }))
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .labelsHidden()
                 // The last tab shown stays: the open island needs a page.
                 .disabled(shown && model.visibleTabs.count == 1)
-                .help(shown ? "Shown in the open island. Turn off to leave \(tab.rawValue) out." : "Left out of the open island. Turn on to show \(tab.rawValue).")
-            Button { withAnimation { model.moveTab(tab, by: -1) } } label: {
+                .help(shown ? "Shown in the open island. Turn off to leave \(tab.label) out." : "Left out of the open island. Turn on to show \(tab.label).")
+            Button { withAnimation(Motion.animation(.default)) { model.moveTab(tab, by: -1) } } label: {
                 Image(systemName: "chevron.up").frame(width: 22, height: 22).contentShape(Rectangle())
             }
             .disabled(index == 0)
-            .help("Move \(tab.rawValue) left")
-            Button { withAnimation { model.moveTab(tab, by: 1) } } label: {
+            .help("Move \(tab.label) left")
+            .accessibilityLabel("Move \(tab.label) left")
+            Button { withAnimation(Motion.animation(.default)) { model.moveTab(tab, by: 1) } } label: {
                 Image(systemName: "chevron.down").frame(width: 22, height: 22).contentShape(Rectangle())
             }
             .disabled(index == count - 1)
-            .help("Move \(tab.rawValue) right")
+            .help("Move \(tab.label) right")
+            .accessibilityLabel("Move \(tab.label) right")
         }
         .buttonStyle(.borderless)
         .font(.system(size: 12, weight: .semibold))
@@ -920,7 +922,7 @@ private struct AccountsShortcutSection: View {
             AgentAvatar(kind: kind, state: .idle, size: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text("\(kind.displayName) accounts")
-                Text(installed ? "Switched by \(tool)" + (count.map { " · \($0) account\($0 == 1 ? "" : "s")" } ?? "") : "Set up \(tool) to switch them")
+                Text(installed ? "Switched by \(tool)" + (count.map { " · " + Spoken.count($0, "account", "accounts") } ?? "") : "Set up \(tool) to switch them")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()

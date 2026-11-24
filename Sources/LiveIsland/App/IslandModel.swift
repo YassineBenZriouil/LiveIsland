@@ -13,6 +13,17 @@ enum IslandTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// The name people see. `rawValue` is the saved tab order and the `liveisland://open/<tab>`
+    /// token, so it must never change when the wording, or the language, does.
+    var label: String {
+        switch self {
+        case .media: return String(localized: "Media")
+        case .agents: return String(localized: "Agents")
+        case .activity: return String(localized: "Activity")
+        case .accounts: return String(localized: "Accounts")
+        }
+    }
+
     var symbol: String {
         switch self {
         case .media: return "music.note"

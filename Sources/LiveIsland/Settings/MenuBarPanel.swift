@@ -54,6 +54,7 @@ struct MenuBarPanel: View {
             .buttonStyle(.plain)
             .liquidGlass(in: Circle(), interactive: true)
             .help("Settings")
+            .accessibilityLabel("Settings")
         }
     }
 
@@ -61,7 +62,7 @@ struct MenuBarPanel: View {
         let working = model.sessions.filter { $0.state == .working }.count
         let waiting = model.sessions.filter { $0.state == .waiting }.count
         var parts: [String] = []
-        if waiting > 0 { parts.append("\(waiting) agent\(waiting == 1 ? "" : "s") need\(waiting == 1 ? "s" : "") you") }
+        if waiting > 0 { parts.append(Spoken.plural(waiting, one: "1 agent needs you", other: "\(waiting) agents need you")) }
         if working > 0 { parts.append("\(working) working") }
         if let player = model.players.first(where: \.isPlaying) { parts.append("\(AppInfo.name(player.bundleIdentifier) ?? "Music") playing") }
         return parts.isEmpty ? "All quiet" : parts.joined(separator: " · ")
@@ -90,6 +91,7 @@ private struct MiniPlayer: View {
         HStack(spacing: 10) {
             if let track = model.nowPlaying {
                 Artwork(image: model.artwork(for: track)?.image, size: 44, corner: 10)
+                    .accessibilityHidden(true)
                     .overlay(alignment: .bottomTrailing) {
                         if let icon = AppInfo.icon(track.bundleIdentifier) {
                             Image(nsImage: icon).resizable().frame(width: 16, height: 16).offset(x: 4, y: 4)
@@ -106,10 +108,12 @@ private struct MiniPlayer: View {
                         .frame(width: 30, height: 30).contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(track.isPlaying ? "Pause" : "Play")
                 Button { model.nextTrack() } label: {
                     Image(systemName: "forward.fill").font(.system(size: 13, weight: .bold)).frame(width: 26, height: 30)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Next track")
             } else {
                 IconBadge(symbol: "music.note", tint: .pink, size: 44)
                 VStack(alignment: .leading, spacing: 2) {
@@ -149,7 +153,7 @@ private struct QuickToggle: View {
 
     var body: some View {
         Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { isOn.toggle() }
+            withAnimation(Motion.animation(.spring(response: 0.3, dampingFraction: 0.8))) { isOn.toggle() }
         } label: {
             VStack(spacing: 6) {
                 ZStack {
@@ -166,6 +170,10 @@ private struct QuickToggle: View {
         .buttonStyle(PressableStyle())
         .liquidGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous), tint: isOn ? tint.opacity(0.18) : nil)
         .help(isOn ? "Hide \(title.lowercased()) in the island" : "Show \(title.lowercased()) in the island")
+        // A toggle in all but looks: VoiceOver says whether it's on.
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityHint(isOn ? "Hides \(title.lowercased()) in the island" : "Shows \(title.lowercased()) in the island")
     }
 }
 

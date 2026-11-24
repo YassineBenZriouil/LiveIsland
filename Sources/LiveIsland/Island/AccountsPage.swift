@@ -26,10 +26,12 @@ struct AccountsPage: View {
                 }
                 .buttonStyle(PressableStyle())
                 .help("Account settings")
+                .accessibilityLabel("Account settings")
             }
             if state.accounts.isEmpty && state.codexAccounts.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "person.2.fill").font(.system(size: 26)).foregroundStyle(.white.opacity(0.35))
+                        .accessibilityHidden(true)
                     Text("No accounts yet").font(.system(size: 13, weight: .semibold))
                     Text("Use Claude Code or Codex once and the account shows up here. Log in to more with /login or codex login.")
                         .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).multilineTextAlignment(.center)
@@ -83,7 +85,7 @@ private struct KindPicker: View {
             ForEach([AgentKind.claude, .codex], id: \.self) { kind in
                 let selected = model.accountsKind == kind
                 let count = kind == .claude ? model.accounts.count : model.codexAccounts.count
-                Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { model.accountsKind = kind } } label: {
+                Button { withAnimation(Motion.animation(.spring(response: 0.3, dampingFraction: 0.85))) { model.accountsKind = kind } } label: {
                     HStack(spacing: 5) {
                         AgentGlyph(kind: kind, size: 8).frame(width: 12, height: 12)
                         Text(kind.displayName).font(.system(size: 11, weight: .semibold))
@@ -96,6 +98,9 @@ private struct KindPicker: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(PressableStyle())
+                .accessibilityLabel(kind.displayName)
+                .accessibilityValue(Spoken.count(count, "account", "accounts"))
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(2)
@@ -131,6 +136,8 @@ private struct ClaudeSwapHeader: View {
                 }
                 .buttonStyle(PressableStyle())
                 .help(swap.autoSwitch ? "claude-swap switches before an account runs out. Tap to turn off." : "Let claude-swap switch before an account runs out")
+                .accessibilityLabel("Automatic switching")
+                .accessibilityValue(swap.autoSwitch ? (running ? "On, running" : "On") : "Off")
                 Button { model.openSettings(.accounts, anchor: "claude/console") } label: {
                     Image(systemName: "terminal").font(.system(size: 9, weight: .bold))
                         .frame(width: 20, height: 18).background(Capsule().fill(.white.opacity(0.08)))
@@ -138,6 +145,7 @@ private struct ClaudeSwapHeader: View {
                 }
                 .buttonStyle(PressableStyle())
                 .help("claude-swap's console: every command and its output")
+                .accessibilityLabel("claude-swap's console")
                 if let last = swap.lastEvent, swap.autoSwitch {
                     Text(last.summary).font(.system(size: 9.5)).foregroundStyle(.white.opacity(0.45)).lineLimit(1).privacySensitive()
                 }
@@ -180,6 +188,8 @@ private struct CodexSwapHeader: View {
                 }
                 .buttonStyle(PressableStyle())
                 .help(swap.autoSwitch ? "ccswap switches Codex before an account runs out. Tap to turn off." : "Let ccswap switch Codex before an account runs out")
+                .accessibilityLabel("Automatic switching for Codex")
+                .accessibilityValue(swap.autoSwitch ? (running ? "On, running" : "On") : "Off")
                 Button { model.openSettings(.accounts, anchor: "codex/console") } label: {
                     Image(systemName: "terminal").font(.system(size: 9, weight: .bold))
                         .frame(width: 20, height: 18).background(Capsule().fill(.white.opacity(0.08)))
@@ -187,6 +197,7 @@ private struct CodexSwapHeader: View {
                 }
                 .buttonStyle(PressableStyle())
                 .help("ccswap's console: every command and its output")
+                .accessibilityLabel("ccswap's console")
                 if let last = swap.lastEvent, swap.autoSwitch {
                     Text(last.summary).font(.system(size: 9.5)).foregroundStyle(.white.opacity(0.45)).lineLimit(1).privacySensitive()
                 }
@@ -208,7 +219,7 @@ private struct AccountRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            AccountAvatar(identity: account.identity, size: 30)
+            AccountAvatar(identity: account.identity, size: 30).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Text(account.identity.displayName).font(.system(size: 13, weight: .semibold)).lineLimit(1).privacySensitive()
@@ -220,6 +231,7 @@ private struct AccountRow: View {
                 Text(account.identity.email).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).lineLimit(1).privacySensitive()
             }
             .frame(width: 168, alignment: .leading)
+            .accessibilityElement(children: .combine)
             let windows = account.windows
             if windows.isEmpty {
                 LimitMeter(label: "Week", window: nil)
@@ -237,6 +249,7 @@ private struct AccountRow: View {
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(account.isActive ? 0.1 : 0.05)))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(border, lineWidth: account.isActive || isBest ? 1 : 0.5))
+        .accessibilityElement(children: .contain)
     }
 
     private var border: Color {
@@ -248,7 +261,7 @@ private struct AccountRow: View {
         if account.isActive {
             Chip(text: account.isAtLimit ? "Out of room" : "In use", color: account.isAtLimit ? .orange : .green)
         } else if model.accountsState.switching == account.id {
-            ProgressView().controlSize(.small).frame(width: 64)
+            ProgressView().controlSize(.small).frame(width: 64).accessibilityLabel("Switching")
         } else if account.needsLogin {
             Chip(text: "Sign in again", color: .orange)
                 .help(account.kind == .codex ? "Sign in to \(account.identity.email) again in Settings › Accounts › Codex" : "Log in to \(account.identity.email) once with /login in Claude Code")
@@ -261,6 +274,7 @@ private struct AccountRow: View {
             .liquidGlass(in: Capsule(), tint: isBest ? Color.orange.opacity(0.35) : nil, interactive: true)
             .disabled(model.accountsState.switching != nil)
             .help(isBest ? "The account with the most room" : "Use this account in \(account.kind.displayName)")
+            .accessibilityLabel(isBest ? "Switch, the account with the most room" : "Switch to this account")
         } else if account.kind == .codex ? model.accountsState.ccswapInstalled : model.accountsState.claudeSwapInstalled {
             Text(account.kind == .codex ? "Not in ccswap" : "Not in claude-swap").font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.4))
                 .help(account.kind == .codex ? "Add it in Settings › Accounts › Codex" : "Add it in Settings › Accounts")
@@ -290,6 +304,11 @@ struct LimitMeter: View {
                 .font(.system(size: 9)).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
         }
         .frame(width: width)
+        // A gauge, read as one: "Week limit, 42% used, resets in 3 days".
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) limit")
+        .accessibilityValue(used.map { "\(Int($0.rounded()))% used" + (window?.resetsAt.map { ", resets in \(Spoken.duration($0.timeIntervalSinceNow))" } ?? "") }
+                            ?? "Not seen yet")
     }
 
     private func color(_ used: Double) -> Color {
