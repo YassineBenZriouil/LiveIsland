@@ -552,15 +552,36 @@ private struct AgentsSettingsPage: View {
                     }
                     .padding(.vertical, 4)
                 }
-                Text("Several accounts? The numbers follow whichever one Claude Code used last.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                // Numbers land on an account only from a session started after the latest
+                // switch, or when they match its reset times: say so, not "the last one used".
+                Text("These are the latest numbers Claude Code reported, from the account it was using. With several accounts, each one keeps its own: the island and the Accounts tab show the account in use, with numbers from sessions started after you switched to it.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } header: {
                 Text("Claude Code limits")
             }
             if let usage = model.agents.usage {
-                Section("Claude Code tokens") {
+                Section {
                     LabeledContent("This 5-hour window", value: "\(Format.tokens(usage.windowTokens)) · \(usage.windowRequests) replies")
                     LabeledContent("Today", value: "\(Format.tokens(usage.todayTokens)) · \(usage.todayRequests) replies")
+                    LabeledContent("Today by kind", value: "In \(Format.tokens(usage.today.input)) · Out \(Format.tokens(usage.today.output)) · Cache write \(Format.tokens(usage.today.cacheWrite)) · Cache read \(Format.tokens(usage.today.cacheRead))")
+                    LabeledContent("Estimated cost today", value: Format.cost(usage.todayCost))
+                    if usage.windowStart != nil {
+                        LabeledContent("Estimated cost this window", value: Format.cost(usage.windowCost))
+                    }
+                    let report = UsageReport(history: model.agents.usageHistory)
+                    if !report.isEmpty {
+                        LabeledContent("Last 30 days", value: "\(Format.cost(report.cost)) · \(Format.tokens(report.tokens)) tokens")
+                    }
+                    Text("Estimates at API list prices, cache reads left out of the token counts. A subscription isn't billed per token. A \"+\" means some replies came from a model without a known price.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                } header: {
+                    Text("Claude Code tokens")
+                }
+            }
+            if model.showCodex, let tokens = model.agents.codexTodayTokens {
+                Section("Codex tokens") {
+                    LabeledContent("Today", value: Format.tokens(tokens))
+                    LabeledContent("Last 30 days", value: Format.tokens(model.agents.codexHistory.reduce(0) { $0 + $1.tokens }))
                 }
             }
         }
