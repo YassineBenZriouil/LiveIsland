@@ -599,13 +599,8 @@ private struct VolumeRow: View {
                     CapsuleSlider(value: output.muted ? 0 : Double(output.volume), tint: .white) { model.volume.setVolume(Float($0)) }
                         .frame(width: 120)
                 }
-                HStack(spacing: 4) {
-                    Image(systemName: deviceSymbol(output)).font(.system(size: 10, weight: .semibold))
-                    Text(output.device).lineLimit(1)
-                }
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.5))
-                .frame(maxWidth: 120, alignment: .leading)
+                OutputPicker(output: output)
+                    .frame(maxWidth: 120, alignment: .leading)
             }
         }
     }
@@ -615,9 +610,57 @@ private struct VolumeRow: View {
         return output.volume < 0.34 ? "speaker.wave.1.fill" : output.volume < 0.67 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"
     }
 
-    private func deviceSymbol(_ output: OutputVolume.State) -> String {
+}
+
+/// The output's name, which opens a menu of the other outputs (AirPods, speakers, a display)
+/// to send the sound to. With only one output, it's a plain label.
+private struct OutputPicker: View {
+    @EnvironmentObject private var model: IslandModel
+    let output: OutputVolume.State
+
+    var body: some View {
+        if output.choices.count > 1 {
+            Menu {
+                ForEach(output.choices) { choice in
+                    Button { model.volume.select(choice.id) } label: {
+                        Label(choice.name, systemImage: choice.id == output.uid ? "checkmark" : Self.symbol(choice))
+                    }
+                }
+            } label: {
+                label(chevron: true)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Choose where the sound plays")
+        } else {
+            label(chevron: false)
+        }
+    }
+
+    private func label(chevron: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: Self.symbol(output)).font(.system(size: 10, weight: .semibold))
+            Text(output.device).lineLimit(1)
+            if chevron { Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold)) }
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.5))
+    }
+
+    static func symbol(_ output: OutputVolume.State) -> String {
         if output.isBluetooth { return HeadphoneSymbol.name(for: output.device) }
         return output.isBuiltIn ? "laptopcomputer" : "hifispeaker.fill"
+    }
+
+    static func symbol(_ choice: AudioOutputChoice) -> String {
+        switch choice.kind {
+        case .builtIn: return "laptopcomputer"
+        case .bluetooth: return HeadphoneSymbol.name(for: choice.name)
+        case .display: return "display"
+        case .airPlay: return "airplayaudio"
+        case .wired, .virtual, .other: return "hifispeaker.fill"
+        }
     }
 }
 
@@ -1748,7 +1791,9 @@ private struct MicrophoneTile: View {
         let call = model.system.call
         let apps = model.system.microphoneApps
         Tile(symbol: call != nil ? "phone.fill" : "mic.fill", tint: call != nil ? .green : .orange,
-             title: call != nil ? "Call" : "Microphone") {
+             title: call != nil ? "Call" : "Microphone", accessory: {
+            if call != nil { MicMuteButton(microphone: model.microphone) }
+        }) {
             if let call {
                 Text(call.app).font(.system(size: 14, weight: .bold)).lineLimit(1)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -1766,6 +1811,27 @@ private struct MicrophoneTile: View {
                 Text("Off").font(.system(size: 14, weight: .bold)).foregroundStyle(.white.opacity(0.8))
                 Text("No app is listening").font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
             }
+        }
+    }
+}
+
+/// Mutes the Mac's microphone for the call; red while muted. LiveIsland gives the sound back
+/// when the call ends.
+private struct MicMuteButton: View {
+    @ObservedObject var microphone: MicrophoneMute
+
+    var body: some View {
+        if let state = microphone.state {
+            Button { microphone.toggle() } label: {
+                Image(systemName: state.muted ? "mic.slash.fill" : "mic.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(state.muted ? .white : .white.opacity(0.85))
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(state.muted ? Color.red : Color.white.opacity(0.14)))
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(PressableStyle())
+            .help(state.muted ? "Unmute \(state.device)" : "Mute \(state.device)")
         }
     }
 }

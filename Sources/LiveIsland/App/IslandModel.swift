@@ -104,7 +104,19 @@ final class IslandModel: ObservableObject {
     @Published var expandOnHover: Bool { didSet { save(expandOnHover, Key.hover) } }
     @Published var hoverDelay: Double { didSet { defaults.set(hoverDelay, forKey: Key.hoverDelay) } }
     @Published var ambientGlow: Bool { didSet { save(ambientGlow, Key.glow) } }
-    @Published var agentSounds: Bool { didSet { save(agentSounds, Key.sounds) } }
+    @Published var agentSounds: Bool {
+        didSet {
+            save(agentSounds, Key.sounds)
+            if agentSounds, quietInFocus { focus.requestAccess() }
+        }
+    }
+    /// Agent sounds and the timer chime stay quiet while a Focus (Do Not Disturb included) is on.
+    @Published var quietInFocus: Bool {
+        didSet {
+            save(quietInFocus, Key.quietInFocus)
+            if quietInFocus { focus.requestAccess() }
+        }
+    }
     /// Send a notification when an agent needs the person and the island can't be seen. Off
     /// until the person turns it on; turning it on asks macOS for permission.
     @Published var notifyWhenHidden: Bool {
@@ -175,6 +187,8 @@ final class IslandModel: ObservableObject {
 
     let media = NowPlayingProvider()
     let volume = OutputVolume()
+    let microphone = MicrophoneMute()
+    let focus = FocusStatus()
     let levels = AudioLevelMeter()
     let updater = Updater()
     let claudeSwap = ClaudeSwapController()
@@ -210,7 +224,7 @@ final class IslandModel: ObservableObject {
                                      Key.calendar: true, Key.claude: true, Key.codex: true, Key.hover: true,
                                      Key.hoverDelay: 0.12, Key.glow: true, Key.sounds: false, Key.players: true,
                                      Key.waveform: true, Key.updates: true, Key.fullScreen: false, Key.sharing: true,
-                                     Key.hideDetails: false, Key.moments: true])
+                                     Key.hideDetails: false, Key.moments: true, Key.quietInFocus: true])
         showMedia = defaults.bool(forKey: Key.media)
         showAgents = defaults.bool(forKey: Key.agents)
         showCalls = defaults.bool(forKey: Key.calls)
@@ -224,6 +238,7 @@ final class IslandModel: ObservableObject {
         agentSounds = defaults.bool(forKey: Key.sounds)
         notifyWhenHidden = defaults.bool(forKey: Key.notify)
         openOnMoments = defaults.bool(forKey: Key.moments)
+        quietInFocus = defaults.bool(forKey: Key.quietInFocus)
         liveWaveform = defaults.bool(forKey: Key.waveform)
         checkForUpdates = defaults.bool(forKey: Key.updates)
         tabOrder = Ordering.restore(defaults.stringArray(forKey: Key.tabOrder) ?? [], all: IslandTab.allCases, name: \.rawValue)
@@ -268,7 +283,10 @@ final class IslandModel: ObservableObject {
             self.jump(to: session)
         }
         if notifyWhenHidden { askToNotify() }
-        systemMonitor.onUpdate = { [weak self] in self?.system = $0 }
+        systemMonitor.onUpdate = { [weak self] in
+            self?.system = $0
+            self?.microphone.isActive = $0.call != nil
+        }
         systemMonitor.onEvent = { [weak self] in self?.flash($0) }
         calendar.onUpdate = { [weak self] in self?.events = $0 }
         media.start()
@@ -302,6 +320,7 @@ final class IslandModel: ObservableObject {
     func stop() {
         media.stop()
         volume.stop()
+        microphone.stop()
         levels.stop()
         updater.stop()
         accountsMonitor.stop()
@@ -474,8 +493,8 @@ final class IslandModel: ObservableObject {
         }
         if agentSounds {
             for session in next.sessions where before[session.id] == .working {
-                if session.state == .waiting { NSSound(named: "Funk")?.play(); break }
-                if session.state == .done { NSSound(named: "Glass")?.play(); break }
+                if session.state == .waiting { playSound("Funk"); break }
+                if session.state == .done { playSound("Glass"); break }
             }
         }
         agents = next
@@ -907,7 +926,7 @@ final class IslandModel: ObservableObject {
         self.timer = nil
         timerWork = nil
         timerFinished = true
-        NSSound(named: "Glass")?.play()
+        playSound("Glass")
         timerAlertWork?.cancel()
         let clear = DispatchWorkItem { [weak self] in
             self?.timerFinished = false
@@ -989,6 +1008,12 @@ final class IslandModel: ObservableObject {
         SettingsWindowController.shared.show(model: self, section: section, anchor: anchor)
     }
 
+    /// Every sound LiveIsland makes goes through here, so a Focus can keep them all quiet.
+    private func playSound(_ name: NSSound.Name) {
+        guard SoundPolicy.mayPlay(quietInFocus: quietInFocus, focused: focus.isFocused) else { return }
+        NSSound(named: name)?.play()
+    }
+
     private func save(_ value: Bool, _ key: String) {
         defaults.set(value, forKey: key)
     }
@@ -1006,6 +1031,7 @@ final class IslandModel: ObservableObject {
         static let glow = "ambientGlow"
         static let sounds = "agentSounds"
         static let notify = "notifyAgentsWhenHidden"
+        static let quietInFocus = "quietInFocus"
         static let players = "controlPlayers"
         static let waveform = "liveWaveform"
         static let tabOrder = "tabOrder"
