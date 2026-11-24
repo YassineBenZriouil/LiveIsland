@@ -383,8 +383,8 @@ struct LyricsPanelTests {
         #expect(LyricsOffset.stepped(0, by: 1) == 0.1)
         #expect(LyricsOffset.stepped(0.1, by: 2) == 0.3, "no 0.30000000000000004")
         #expect(LyricsOffset.stepped(0, by: -3) == -0.3)
-        #expect(LyricsOffset.stepped(9.95, by: 5) == 10)
-        #expect(LyricsOffset.stepped(-10, by: -1) == -10)
+        #expect(LyricsOffset.stepped(2.95, by: 5) == 3, "within ±3 s")
+        #expect(LyricsOffset.stepped(-3, by: -1) == -3)
         #expect(LyricsOffset.label(0) == "On time")
         #expect(LyricsOffset.label(0.3) == "0.3 s sooner")
         #expect(LyricsOffset.label(-1.2) == "1.2 s later")
@@ -423,7 +423,6 @@ struct LyricsAppearanceTests {
         look.highlight = .line
         look.lineAnimation = .fade
         look.position = .free
-        look.border = true
         #expect(LyricsAppearance.decode(look.encoded()) == look)
     }
 
@@ -465,9 +464,8 @@ struct LyricsAppearanceTests {
         look.blur = 0
         look.opacity = 0
         #expect(look.needsTextShadow, "floating words stay readable")
-        #expect(LyricsAppearance().fadeReach > 0)
         look.edgeFade = 0
-        #expect(look.fadeReach == 0)
+        #expect(look.softEdge(for: 151, 68) == 0)
     }
 
     @Test func theLineFillsFromItsStartToTheNext() throws {
@@ -505,5 +503,79 @@ struct LyricsAppearanceTests {
         #expect(info.position(at: now.addingTimeInterval(5)) == 35, "so the lyrics follow the song")
         let stamped = Data(#"{"type":"data","diff":false,"payload":{"title":"Song","artist":"Artist","playing":true,"elapsedTime":30,"timestamp":"2027-01-15T07:59:58Z"}}"#.utf8)
         #expect(try #require(NowPlaying.applying(stamped, to: nil, now: now)).timestamp == now.addingTimeInterval(-2), "a real time is kept")
+    }
+}
+
+@Suite("Sing With Me: soft edges and tuning")
+struct LyricsSoftEdgeTests {
+    @Test func softEdgesAreTheSameOnEverySide() {
+        let look = LyricsAppearance()
+        let small = look.softEdge(for: 151, 68)
+        #expect(small > 5 && small < 15, "a few points, from the shorter side")
+        #expect(look.softEdge(for: 68, 151) == small, "the same whichever way round")
+        var strong = look
+        strong.edgeFade = 1
+        #expect(strong.softEdge(for: 151, 68) <= 68 * 0.45, "never past the middle")
+        #expect(look.softEdge(for: 0, 68) == 0)
+    }
+
+    @Test func oldSavedLooksStillRead() {
+        let old = Data(#"{"blur":0.3,"border":true,"drift":false,"edgeFade":0.5,"animation":"fade"}"#.utf8)
+        let look = LyricsAppearance.decode(old)
+        #expect(look.blur == 0.3)
+        #expect(look.edgeFade == 0.5)
+        #expect(look.lineAnimation == .slideUp, "an old key name takes the default")
+        let saved = String(decoding: look.encoded() ?? Data(), as: UTF8.self)
+        #expect(!saved.contains("drift"))
+        #expect(!saved.contains("border"))
+    }
+
+    @Test func tuningOpensUnderTheCardOrAbove() {
+        let bounds = CGRect(x: 0, y: 70, width: 1512, height: 912)
+        let small = CGRect(x: 680, y: 870, width: 151, height: 68)
+        let under = LyricsTuning.frame(card: small, within: bounds)
+        #expect(under.maxY == small.minY - LyricsTuning.gap)
+        #expect(under.maxX == small.maxX, "right edges lined up")
+        let low = CGRect(x: 680, y: 100, width: 151, height: 68)
+        let above = LyricsTuning.frame(card: low, within: bounds)
+        #expect(above.minY == low.maxY + LyricsTuning.gap)
+        let corner = CGRect(x: 0, y: 870, width: 120, height: 68)
+        #expect(LyricsTuning.frame(card: corner, within: bounds).minX == 0, "kept on the screen")
+        let full = CGRect(x: 0, y: 70, width: 1512, height: 912)
+        let beside = LyricsTuning.frame(card: full, within: bounds)
+        #expect(bounds.contains(beside))
+    }
+}
+
+@Suite("Sing With Me: when it shows")
+struct LyricsVisibilityTests {
+    let words = Lyrics(lrc: "[00:01.00] Words to sing")
+    let plain = Lyrics(plain: "Words to read")
+
+    @Test func showsOnlyForASongWithWords() {
+        #expect(LyricsVisibility.showsCard(isOpen: true, isEnabled: true, lyrics: words))
+        #expect(LyricsVisibility.showsCard(isOpen: true, isEnabled: true, lyrics: plain))
+        #expect(!LyricsVisibility.showsCard(isOpen: true, isEnabled: true, lyrics: nil),
+                "none found, still loading, unreachable, or no artist: hidden, not a message")
+        #expect(!LyricsVisibility.showsCard(isOpen: true, isEnabled: true, lyrics: .instrumental))
+    }
+
+    @Test func hidingIsNotClosing() {
+        // The same open choice, a song without words and then one with: back by itself.
+        #expect(!LyricsVisibility.showsCard(isOpen: true, isEnabled: true, lyrics: nil))
+        #expect(LyricsVisibility.showsCard(isOpen: true, isEnabled: true, lyrics: words))
+        #expect(!LyricsVisibility.showsCard(isOpen: false, isEnabled: true, lyrics: words), "× or Escape close it for real")
+    }
+
+    @Test func whileOffAnOpenCardAsks() {
+        #expect(LyricsVisibility.showsCard(isOpen: true, isEnabled: false, lyrics: nil))
+        #expect(!LyricsVisibility.showsCard(isOpen: false, isEnabled: false, lyrics: nil))
+    }
+
+    @Test func theMediaTabEntryHidesTheSameWay() {
+        #expect(LyricsVisibility.showsEntry(isEnabled: false, lyrics: nil), "the offer to turn it on")
+        #expect(LyricsVisibility.showsEntry(isEnabled: true, lyrics: words))
+        #expect(!LyricsVisibility.showsEntry(isEnabled: true, lyrics: nil))
+        #expect(!LyricsVisibility.showsEntry(isEnabled: true, lyrics: .instrumental))
     }
 }

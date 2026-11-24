@@ -234,13 +234,6 @@ final class SingWithMe: ObservableObject {
         replan()
     }
 
-    /// Tries LRCLIB again now, after it couldn't be reached.
-    func retry() {
-        failure = nil
-        if state == .failed { state = .idle }
-        load()
-    }
-
     private func reset() {
         task?.cancel()
         task = nil

@@ -109,12 +109,10 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
     public var alignment: LyricsAlignment = .center
     public var lines: LyricsLineCount = .three
     public var cornerRadius: Double = 16
-    public var border = false
     public var shadow = true
-    /// How much the card fades out toward its left and right sides, 0 to 1.
+    /// Soft edges: how much the card fades out toward all four of its edges, 0 to 1.
     public var edgeFade: Double = 0.35
     public var lineAnimation: LineAnimation = .slideUp
-    public var drift = true
     public var position: LyricsPosition = .underNotch
 
     public static let cornerRange: ClosedRange<Double> = 0...40
@@ -124,7 +122,9 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case blur, opacity, background, customColor, textScale, weight, currentColor, dimming, highlight, alignment, lines
-        case cornerRadius, border, shadow, edgeFade, lineAnimation, drift, position
+        // Values saved by earlier versions may also hold "border" and "drift", which are
+        // no longer settings: they're ignored.
+        case cornerRadius, shadow, edgeFade, lineAnimation, position
     }
 
     public init(from decoder: Decoder) throws {
@@ -144,11 +144,9 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
         alignment = value(.alignment, d.alignment)
         lines = value(.lines, d.lines)
         cornerRadius = value(.cornerRadius, d.cornerRadius)
-        border = value(.border, d.border)
         shadow = value(.shadow, d.shadow)
         edgeFade = value(.edgeFade, d.edgeFade)
         lineAnimation = value(.lineAnimation, d.lineAnimation)
-        drift = value(.drift, d.drift)
         position = value(.position, d.position)
         self = clamped()
     }
@@ -201,8 +199,12 @@ public struct LyricsAppearance: Codable, Equatable, Sendable {
     /// they keep a soft shadow, even with shadows off, so they stay readable.
     public var needsTextShadow: Bool { shadow || (blur < 0.1 && opacity < 0.15) }
 
-    /// How far in from each side the fade reaches, as a share of the width.
-    public var fadeReach: Double { 0.4 * edgeFade }
+    /// How far in from every edge the soft edge reaches, in points: the same on all four
+    /// sides, a share of the card's shorter side, and never past its middle.
+    public func softEdge(for width: Double, _ height: Double) -> Double {
+        let shorter = max(0, min(width, height))
+        return min(edgeFade * 0.45 * shorter, shorter * 0.45)
+    }
 
     /// Bigger or smaller words, by tenths, within range.
     public mutating func changeTextScale(by step: Double) {

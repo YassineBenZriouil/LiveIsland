@@ -7,6 +7,8 @@ import SwiftUI
 struct LyricsActions {
     var close: () -> Void
     var choose: (LyricsPreset) -> Void
+    /// Opens or closes the card's tuning panel.
+    var tune: () -> Void
     var beginMove: () -> Void
     var move: () -> Void
     var endMove: () -> Void
@@ -44,18 +46,25 @@ extension LyricsAlignment {
     var unit: UnitPoint { self == .left ? .leading : self == .right ? .trailing : .center }
 }
 
-/// Fades toward the left and right sides, as much as the look asks.
-struct EdgeFade: View {
-    let reach: Double
+/// Soft edges: the card fades out the same distance in from all four of its edges.
+struct SoftEdges: View {
+    let look: LyricsAppearance
+    let size: CGSize
 
     var body: some View {
-        if reach > 0 {
-            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: reach),
-                                   .init(color: .black, location: 1 - reach), .init(color: .clear, location: 1)],
-                           startPoint: .leading, endPoint: .trailing)
+        let edge = look.softEdge(for: Double(size.width), Double(size.height))
+        if edge > 0, size.width > 0, size.height > 0 {
+            gradient(edge / Double(size.width), .leading, .trailing)
+                .mask(gradient(edge / Double(size.height), .top, .bottom))
         } else {
             Color.black
         }
+    }
+
+    private func gradient(_ reach: Double, _ start: UnitPoint, _ end: UnitPoint) -> LinearGradient {
+        LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: reach),
+                               .init(color: .black, location: 1 - reach), .init(color: .clear, location: 1)],
+                       startPoint: start, endPoint: end)
     }
 }
 
@@ -100,16 +109,16 @@ struct LyricsView: View {
             }
         }
         .frame(width: size.width, height: size.height)
-        .mask(EdgeFade(reach: look.fadeReach))
+        .mask(SoftEdges(look: look, size: size))
         .clipShape(shape)
         .contentShape(shape)
         .overlay(alignment: window.controlsAtTop ? .topTrailing : .bottomTrailing) {
             if !big {
                 HoverControls(sing: sing, window: window, model: model, actions: actions)
                     .padding(LyricsControls.inset)
-                    .opacity(window.isHovering ? 1 : 0)
-                    .allowsHitTesting(window.isHovering)
-                    .animation(.easeOut(duration: 0.15), value: window.isHovering)
+                    .opacity(window.isHovering || window.isTuning ? 1 : 0)
+                    .allowsHitTesting(window.isHovering || window.isTuning)
+                    .animation(.easeOut(duration: 0.15), value: window.isHovering || window.isTuning)
             }
         }
         // Dragging anywhere moves the card; a tap on a line still seeks.
@@ -122,7 +131,7 @@ struct LyricsView: View {
 }
 
 /// The card's background: the chosen colour at the chosen opacity (the cover's, deepened, by
-/// default) and an optional outline. The blur of what's behind the window is the window's
+/// default), filling the whole card. The blur of what's behind the window is the window's
 /// own; the Settings preview stands in for it with a material.
 struct LyricsSurface: View {
     let look: LyricsAppearance
@@ -131,24 +140,24 @@ struct LyricsSurface: View {
     let materialBlur: Bool
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
         ZStack {
             if materialBlur, look.blur > 0.02 {
-                shape.fill(look.blur > 0.7 ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.ultraThinMaterial)).opacity(look.blur)
+                Rectangle().fill(look.blur > 0.7 ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.ultraThinMaterial)).opacity(look.blur)
             }
-            shape.fill(color.opacity(look.opacity))
+            Rectangle().fill(color.opacity(look.opacity))
             if look.background == .artwork, look.opacity > 0.05, let image = artwork?.image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .blur(radius: 40)
-                    .opacity(0.35 * look.opacity)
-                    .clipShape(shape)
-            }
-            if look.border {
-                shape.strokeBorder(look.hasLightBackground ? Color.black.opacity(0.18) : Color.white.opacity(0.22), lineWidth: 1)
+                // In an overlay, so a cover of another shape never makes the card bigger.
+                Color.clear.overlay {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .blur(radius: 40)
+                        .opacity(0.35 * look.opacity)
+                }
+                .clipped()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
     }
 
@@ -163,7 +172,7 @@ struct LyricsSurface: View {
     }
 }
 
-/// The × and the menu, for a small card: they fade in while the pointer is on it.
+/// The tuning button and the ×, for a small card: they fade in while the pointer is on it.
 private struct HoverControls: View {
     @ObservedObject var sing: SingWithMe
     @ObservedObject var window: LyricsWindowState
@@ -172,81 +181,75 @@ private struct HoverControls: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Menu {
-                LyricsMenuItems(sing: sing, window: window, model: model, actions: actions)
-            } label: {
-                circle("slider.horizontal.3")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Size, look and timing")
-            .accessibilityLabel("Size, look and timing")
-            Button(action: actions.close) { circle("xmark") }
-                .buttonStyle(PressableStyle())
-                .help("Close (Esc)")
-                .accessibilityLabel("Close Sing With Me")
+            CardIconButton(window: window, id: "tune", symbol: "slider.horizontal.3", isOn: window.isTuning,
+                           help: "Size, look and timing", action: actions.tune)
+            CardIconButton(window: window, id: "close", symbol: "xmark", help: "Close Sing With Me (Esc)", action: actions.close)
         }
-    }
-
-    private func circle(_ symbol: String) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 22, height: 22)
-            .background(Circle().fill(.black.opacity(0.55)))
-            .overlay(Circle().strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
-            .contentShape(Circle())
     }
 }
 
-/// The menu behind the card's slider button: the most used settings, a tap away.
-struct LyricsMenuItems: View {
-    @ObservedObject var sing: SingWithMe
+/// Every icon button on the card and its tuning panel: one size, and one hover look (it grows
+/// a little and its circle lights up), toned down to the light alone under Reduce Motion.
+/// Hover comes from an AppKit tracking area, which works in a panel that never becomes key.
+struct CardIconButton: View {
     @ObservedObject var window: LyricsWindowState
-    let model: IslandModel
-    let actions: LyricsActions
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let id: String
+    let symbol: String
+    var isOn = false
+    let help: String
+    let action: () -> Void
+
+    static let size: CGFloat = 22
 
     var body: some View {
-        let preset = window.screen.map { sing.placement(for: $0.id).preset } ?? .small
-        Section("Size") {
-            ForEach(LyricsPreset.allCases.filter { $0 != .custom }) { option in
-                Button { actions.choose(option) } label: {
-                    Label(option.title, systemImage: preset == option ? "checkmark" : option.symbol)
-                }
-            }
-            if sing.appearance.position == .free {
-                Button("Back Under the Notch") { actions.choose(preset == .custom ? .small : preset) }
-            }
+        let hovered = window.hoveredButton == id
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: Self.size, height: Self.size)
+                .background(Circle().fill(.black.opacity(isOn || hovered ? 0.8 : 0.55)))
+                .background(Circle().fill(.white.opacity(hovered ? 0.22 : 0)).padding(-2))
+                .scaleEffect(hovered && !reduceMotion ? 1.15 : 1)
+                .animation(Motion.animation(.spring(response: 0.22, dampingFraction: 0.7), reduced: reduceMotion), value: hovered)
+                .contentShape(Circle())
         }
-        Section("Look") {
-            Picker("Blur", selection: $sing.appearance.blur) {
-                Text("None").tag(0.0)
-                Text("Some").tag(0.5)
-                Text("Full").tag(1.0)
-                if ![0, 0.5, 1].contains(sing.appearance.blur) { Text("Custom").tag(sing.appearance.blur) }
-            }
-            Picker("Background", selection: $sing.appearance.background) {
-                ForEach(LyricsAppearance.Background.allCases) { Text($0.title).tag($0) }
-            }
-            Picker("Highlight", selection: $sing.appearance.highlight) {
-                ForEach(LyricsAppearance.Highlight.allCases) { Text($0.title).tag($0) }
-            }
+        .buttonStyle(PressableStyle())
+        .background(HoverTracker { inside in window.setHovered(id, inside) })
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// Tells when the pointer enters and leaves its view, whichever app is in front; clicks go
+/// through it.
+private struct HoverTracker: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> TrackerView { TrackerView(onChange: onChange) }
+    func updateNSView(_ view: TrackerView, context: Context) { view.onChange = onChange }
+
+    final class TrackerView: NSView {
+        var onChange: (Bool) -> Void
+
+        init(onChange: @escaping (Bool) -> Void) {
+            self.onChange = onChange
+            super.init(frame: .zero)
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                           owner: self))
         }
-        Section("Words") {
-            Button("Bigger") { sing.changeFontScale(by: 0.1) }
-            Button("Smaller") { sing.changeFontScale(by: -0.1) }
-            Picker("Lines", selection: $sing.appearance.lines) {
-                ForEach(LyricsLineCount.allCases) { Text($0.title).tag($0) }
-            }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func mouseEntered(with event: NSEvent) { onChange(true) }
+        override func mouseExited(with event: NSEvent) { onChange(false) }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { onChange(false) }
         }
-        Section("Timing: \(LyricsOffset.label(sing.offset))") {
-            Button("Words Sooner by 0.1 s") { sing.nudgeOffset(by: 1) }
-            Button("Words Later by 0.1 s") { sing.nudgeOffset(by: -1) }
-            Button("Reset Timing") { sing.offset = 0 }.disabled(sing.offset == 0)
-        }
-        Divider()
-        Button("Sing With Me Settings…") { model.openSettings(.media, anchor: "lyrics") }
     }
 }
 
@@ -266,27 +269,10 @@ private struct LyricsHeader: View {
                 .frame(maxWidth: max(0, layout.leadingWidth - padding - 8), alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: layout.gap.map { $0.upperBound - $0.lowerBound } ?? 12)
-            HStack(spacing: 6) {
-                Menu {
-                    LyricsMenuItems(sing: sing, window: window, model: model, actions: actions)
-                } label: {
-                    Image(systemName: "slider.horizontal.3").font(.system(size: 12, weight: .semibold))
-                        .frame(width: 26, height: 26).contentShape(Circle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Size, look and timing")
-                .accessibilityLabel("Size, look and timing")
-                Button(action: actions.close) {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
-                        .frame(width: 26, height: 26)
-                        .background(Circle().fill(.primary.opacity(0.14)))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(PressableStyle())
-                .help("Close (Esc)")
-                .accessibilityLabel("Close Sing With Me")
+            HStack(spacing: 4) {
+                CardIconButton(window: window, id: "tune", symbol: "slider.horizontal.3", isOn: window.isTuning,
+                               help: "Size, look and timing", action: actions.tune)
+                CardIconButton(window: window, id: "close", symbol: "xmark", help: "Close Sing With Me (Esc)", action: actions.close)
             }
             .frame(maxWidth: max(0, layout.trailingWidth - padding), alignment: .trailing)
             .fixedSize()
@@ -325,48 +311,23 @@ private struct LyricsBody: View {
     var body: some View {
         let layout = LyricsTypography.layout(panel: size, lines: look.lines, scale: look.textScale)
         let color = Color(look.resolvedCurrentColor)
+        let edge = CGFloat(look.softEdge(for: Double(size.width), Double(size.height)))
         Group {
             if !sing.isEnabled {
                 SingWithMeOptIn(sing: sing)
-            } else if sing.track == nil {
-                message("Play a song to sing along", layout.fontSize)
-            } else {
-                switch sing.state {
-                case .idle:
-                    message(sing.track?.isPlaying == true ? "Looking for lyrics…" : "Lyrics load when the song plays", layout.fontSize)
-                case .loading:
-                    message("Looking for lyrics…", layout.fontSize)
-                case .missing:
-                    message("No lyrics for this song", layout.fontSize)
-                case .failed:
-                    VStack(spacing: 6) {
-                        message("Couldn't reach LRCLIB", layout.fontSize)
-                        if size.height > 80 { Button("Try Again") { sing.retry() }.glassButton() }
-                    }
-                case .found(let lyrics):
-                    if lyrics.kind == .instrumental {
-                        Text("Instrumental ♪").font(.system(size: layout.fontSize, weight: look.weight.font))
-                    } else if lyrics.kind == .synced, let count = layout.lines {
-                        FocusLines(sing: sing, lyrics: lyrics, look: look, count: count, fontSize: layout.fontSize, onSeek: onSeek)
-                    } else {
-                        ScrollingLines(sing: sing, lyrics: lyrics, look: look, size: size, fontSize: layout.fontSize, onSeek: onSeek)
-                    }
+            } else if let lyrics = sing.lyrics, LyricsVisibility.hasWords(lyrics) {
+                if lyrics.kind == .synced, let count = layout.lines {
+                    FocusLines(sing: sing, lyrics: lyrics, look: look, count: count, fontSize: layout.fontSize, onSeek: onSeek)
+                } else {
+                    ScrollingLines(sing: sing, lyrics: lyrics, look: look, size: size, fontSize: layout.fontSize, onSeek: onSeek)
                 }
             }
+            // Without words the card is hidden; nothing to say here as it fades.
         }
         .foregroundStyle(color)
-        .padding(.vertical, LyricsTypography.padding(panel: size))
-        .padding(.horizontal, max(10, size.width * look.fadeReach * 0.5))
-    }
-
-    private func message(_ text: String, _ fontSize: CGFloat) -> some View {
-        Text(text)
-            .font(.system(size: min(max(fontSize * 0.8, 10), 15), weight: .semibold))
-            .opacity(0.75)
-            .lineLimit(2)
-            .minimumScaleFactor(0.8)
-            .multilineTextAlignment(.center)
-            .shadow(color: .black.opacity(look.needsTextShadow ? 0.35 : 0), radius: 3, y: 1)
+        // Clear of the soft edges, so the words don't fade with them.
+        .padding(.vertical, max(LyricsTypography.padding(panel: size), edge * 0.6))
+        .padding(.horizontal, max(10, edge * 0.6 + 4))
     }
 }
 

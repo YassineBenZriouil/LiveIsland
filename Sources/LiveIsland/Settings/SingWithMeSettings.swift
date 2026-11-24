@@ -105,10 +105,11 @@ struct SingWithMeSettings: View {
         Section("Shape") {
             slider("Corners", value: $sing.appearance.cornerRadius, in: LyricsAppearance.cornerRange, step: 1,
                    label: "\(Int(sing.appearance.cornerRadius)) pt")
-            slider("Fade to the sides", value: $sing.appearance.edgeFade, in: 0...1,
+            slider("Soft edges", value: $sing.appearance.edgeFade, in: 0...1,
                    label: percent(sing.appearance.edgeFade, none: "None", full: "Strong"))
-            Toggle("Outline", isOn: $sing.appearance.border)
             Toggle("Shadow", isOn: $sing.appearance.shadow)
+            Text("Soft edges fade the card out the same way on all four sides.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
         }
     }
 
@@ -118,23 +119,15 @@ struct SingWithMeSettings: View {
                 ForEach(LyricsAppearance.LineAnimation.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
-            Toggle("Drift gently side to side while playing", isOn: $sing.appearance.drift)
-            Text("With Reduce Motion on (System Settings › Accessibility › Display), lines only fade and nothing drifts.")
+            Text("With Reduce Motion on (System Settings › Accessibility › Display), lines only fade.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
         }
     }
 
     private var timing: some View {
         Section("Timing") {
-            LabeledContent("Words") {
-                HStack {
-                    Text(LyricsOffset.label(sing.offset)).monospacedDigit()
-                    Stepper("Timing", value: Binding(get: { sing.offset }, set: { sing.offset = LyricsOffset.stepped($0, by: 0) }),
-                            in: LyricsOffset.range, step: LyricsOffset.step)
-                        .labelsHidden()
-                    Button("Reset") { sing.offset = 0 }.disabled(sing.offset == 0)
-                }
-            }
+            slider("Words", value: Binding(get: { sing.offset }, set: { sing.offset = LyricsOffset.stepped($0, by: 0) }),
+                   in: LyricsOffset.range, step: LyricsOffset.step, label: LyricsOffset.label(sing.offset))
             Text("If the words run ahead of the song or behind it, move them by a tenth of a second at a time.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
         }
@@ -150,9 +143,12 @@ struct SingWithMeSettings: View {
             let next = LyricsGeometry.sized(frame, width: width, height: height, within: bounds)
             sing.setPlacement(LyricsPlacement(preset: .custom, frame: screen.relative(next)), for: screen.id)
         }
-        func field(_ title: String, value: CGFloat, whole: CGFloat, set: @escaping (CGFloat) -> Void) -> some View {
+        func field(_ title: String, value: CGFloat, least: CGFloat, whole: CGFloat, set: @escaping (CGFloat) -> Void) -> some View {
             LabeledContent(title) {
                 HStack(spacing: 6) {
+                    Slider(value: Binding(get: { Double(value) }, set: { set(CGFloat($0.rounded())) }),
+                           in: Double(least)...Double(max(whole, least + 1)))
+                        .frame(width: 160)
                     TextField(title, value: Binding(
                         get: { sing.sizeInPercent ? Double((value / whole * 100).rounded()) : Double(value.rounded()) },
                         set: { set(sing.sizeInPercent ? CGFloat($0) / 100 * whole : CGFloat($0)) }), format: .number)
@@ -173,8 +169,12 @@ struct SingWithMeSettings: View {
             })) {
                 ForEach(LyricsPreset.allCases) { Text($0.title).tag($0) }
             }
-            field("Width", value: frame.width, whole: bounds.width) { apply(width: $0, height: frame.height) }
-            field("Height", value: frame.height, whole: bounds.height) { apply(width: frame.width, height: $0) }
+            field("Width", value: frame.width, least: LyricsGeometry.minimumSize.width, whole: bounds.width) {
+                apply(width: $0, height: frame.height)
+            }
+            field("Height", value: frame.height, least: LyricsGeometry.minimumSize.height, whole: bounds.height) {
+                apply(width: frame.width, height: $0)
+            }
             Picker("Units", selection: $sing.sizeInPercent) {
                 Text("Points").tag(false)
                 Text("% of the screen").tag(true)
@@ -257,11 +257,12 @@ private struct LyricsPreview: View {
                     }
                 }
                 .foregroundStyle(Color(look.resolvedCurrentColor))
-                .padding(.vertical, LyricsTypography.padding(panel: shown))
-                .padding(.horizontal, max(10, shown.width * look.fadeReach * 0.5))
+                .padding(.vertical, max(LyricsTypography.padding(panel: shown),
+                                        CGFloat(look.softEdge(for: Double(shown.width), Double(shown.height))) * 0.6))
+                .padding(.horizontal, max(10, CGFloat(look.softEdge(for: Double(shown.width), Double(shown.height))) * 0.6 + 4))
             }
             .frame(width: shown.width, height: shown.height)
-            .mask(EdgeFade(reach: look.fadeReach))
+            .mask(SoftEdges(look: look, size: shown))
             .clipShape(RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous))
             .shadow(color: .black.opacity(look.shadow && (look.opacity >= 0.1 || look.blur >= 0.1) ? 0.35 : 0), radius: 10, y: 4)
             .environment(\.colorScheme, look.hasLightBackground ? .light : .dark)

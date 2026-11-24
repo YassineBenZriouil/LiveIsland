@@ -361,7 +361,7 @@ private struct MediaPage: View {
                 }
                 HStack(spacing: 12) {
                     PlayerSwitcher()
-                    SingWithMeCard(sing: model.singWithMe, playing: track.isPlaying, accent: accent,
+                    SingWithMeCard(sing: model.singWithMe, accent: accent,
                                    hidesDetails: model.hidesDetails) { model.toggleLyrics() }
                     Spacer(minLength: 0)
                     VolumeRow(accent: accent)

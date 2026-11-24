@@ -50,6 +50,14 @@ final class LyricsWindowState: ObservableObject {
     @Published var screen: LyricsScreen?
     @Published var hidesDetails = false
     @Published var isHovering = false
+    /// The tuning panel is open: the card's buttons stay visible.
+    @Published var isTuning = false
+    /// The icon button under the pointer, for their shared hover look.
+    @Published private(set) var hoveredButton: String?
+
+    func setHovered(_ id: String, _ inside: Bool) {
+        if inside, hoveredButton != id { hoveredButton = id } else if !inside, hoveredButton == id { hoveredButton = nil }
+    }
 
     var header: LyricsHeaderLayout { LyricsHeaderLayout(panel: frame, notch: screen?.notch) }
     var controlsAtTop: Bool { LyricsControls.atTop(panel: frame, notch: screen?.notch) }
@@ -83,33 +91,29 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 }
 
 /// The panel's content: a frosted backdrop (an `NSVisualEffectView`, the only real blur of
-/// what's behind a window) under the SwiftUI card, every edge and corner a handle to resize
-/// it, and the side-to-side drift as a Core Animation loop on both.
+/// what's behind a window) under the SwiftUI card, both filling the whole card, and every
+/// edge and corner a handle to resize it.
 final class LyricsResizingView: NSView {
     var limits: (() -> CGRect)?
     var onFrame: ((CGRect, Bool) -> Void)?
     var onHover: ((Bool) -> Void)?
-    /// Moves with the drift: the backdrop and the card together.
-    private let content = NSView()
     private let backdrop = NSVisualEffectView()
     private let host: NSView
     private var drag: (start: CGRect, mouse: CGPoint, edges: LyricsGeometry.Edges)?
     private var look = LyricsAppearance.standard
-    private var drifting = false
+    private var maskedFor: (radius: CGFloat, edge: CGFloat)?
     private static let inset: CGFloat = 6
-    private static let driftKey = "drift"
 
     init(host: NSView) {
         self.host = host
         super.init(frame: .zero)
-        wantsLayer = true
-        content.wantsLayer = true
         backdrop.blendingMode = .behindWindow
         backdrop.state = .active
         backdrop.material = .hudWindow
-        content.addSubview(backdrop)
-        content.addSubview(host)
-        addSubview(content)
+        backdrop.autoresizingMask = [.width, .height]
+        host.autoresizingMask = [.width, .height]
+        addSubview(backdrop)
+        addSubview(host)
     }
 
     @available(*, unavailable)
@@ -119,60 +123,53 @@ final class LyricsResizingView: NSView {
 
     override func layout() {
         super.layout()
-        let changed = content.frame.size != bounds.size
-        content.frame = bounds
-        backdrop.frame = content.bounds
-        host.frame = content.bounds
-        if changed { updateBackdrop() }
+        backdrop.frame = bounds
+        host.frame = bounds
+        updateMask()
     }
 
-    /// The blur's strength, its look (dark or light), and its shape: the card's corners and
-    /// its fade toward the sides.
+    /// The blur's strength and its look (dark or light).
     func apply(_ look: LyricsAppearance) {
-        let shapeChanged = look.cornerRadius != self.look.cornerRadius || look.edgeFade != self.look.edgeFade
         self.look = look
         backdrop.isHidden = look.blur < 0.02
         backdrop.alphaValue = CGFloat(look.blur)
         backdrop.material = look.blur > 0.7 ? .fullScreenUI : .hudWindow
         backdrop.appearance = NSAppearance(named: look.hasLightBackground ? .aqua : .darkAqua)
-        if shapeChanged || backdrop.maskImage == nil { updateBackdrop() }
+        updateMask()
     }
 
-    private func updateBackdrop() {
+    /// The backdrop's shape: the card's corners and its soft edges, the same on all four
+    /// sides. The mask is a small nine-part image, its middle stretched, so it fills the
+    /// whole card at any size, while it's resized too.
+    private func updateMask() {
         let size = bounds.size
         guard size.width > 0, size.height > 0 else { return }
-        let radius = CGFloat(look.cornerRadius)
-        let reach = CGFloat(look.fadeReach)
-        backdrop.maskImage = NSImage(size: size, flipped: false) { rect in
+        let radius = min(CGFloat(look.cornerRadius), min(size.width, size.height) / 2)
+        let edge = CGFloat(look.softEdge(for: Double(size.width), Double(size.height))).rounded()
+        if let maskedFor, maskedFor.radius == radius, maskedFor.edge == edge, backdrop.maskImage != nil { return }
+        maskedFor = (radius, edge)
+        let cap = max(radius, edge) + 1
+        let side = cap * 2 + 1
+        let image = NSImage(size: CGSize(width: side, height: side), flipped: false) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
             NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
-            if reach > 0, let gradient = NSGradient(colorsAndLocations: (.clear, 0), (.black, reach), (.black, 1 - reach), (.clear, 1)) {
-                gradient.draw(in: rect, angle: 0)
-            } else {
+            guard edge > 0,
+                  let horizontal = NSGradient(colorsAndLocations: (.clear, 0), (.black, edge / side), (.black, 1 - edge / side), (.clear, 1)),
+                  let vertical = NSGradient(colorsAndLocations: (.clear, 0), (.black, edge / side), (.black, 1 - edge / side), (.clear, 1))
+            else {
                 NSColor.black.setFill()
                 rect.fill()
+                return true
             }
+            horizontal.draw(in: rect, angle: 0)
+            // Keep only what both fades keep: a soft edge all around.
+            context.setBlendMode(.destinationIn)
+            vertical.draw(in: rect, angle: 90)
             return true
         }
-    }
-
-    /// The gentle sway, only while wanted (playing, chosen, no Reduce Motion).
-    func setDrifting(_ on: Bool) {
-        guard on != drifting else { return }
-        drifting = on
-        guard let layer = content.layer else { return }
-        if on {
-            let drift = CABasicAnimation(keyPath: "transform.translation.x")
-            drift.fromValue = -4
-            drift.toValue = 4
-            drift.duration = 3.4
-            drift.autoreverses = true
-            drift.repeatCount = .infinity
-            drift.isAdditive = true
-            drift.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            layer.add(drift, forKey: Self.driftKey)
-        } else {
-            layer.removeAnimation(forKey: Self.driftKey)
-        }
+        image.capInsets = NSEdgeInsets(top: cap, left: cap, bottom: cap, right: cap)
+        image.resizingMode = .stretch
+        backdrop.maskImage = image
     }
 
     private func edges(at point: CGPoint) -> LyricsGeometry.Edges {
@@ -248,9 +245,10 @@ final class LyricsResizingView: NSView {
     }
 }
 
-/// Owns the Sing With Me card: opens it on the island's display at the size saved for that
-/// display (small, under the notch, unless the person chose otherwise), follows drags and
-/// resizes, and listens for Escape only while it's open.
+/// Owns the Sing With Me card: shows it on the island's display at the size saved for that
+/// display (small, under the notch, unless the person chose otherwise) while it's open and
+/// the song has words, follows drags and resizes, opens its tuning panel, and listens for
+/// Escape only while it's on screen.
 @MainActor
 final class LyricsWindowController {
     private let model: IslandModel
@@ -258,7 +256,11 @@ final class LyricsWindowController {
     private let state = LyricsWindowState()
     private var panel: LyricsPanel?
     private var container: LyricsResizingView?
-    private var openChanges: AnyCancellable?
+    private var visibilityChanges: AnyCancellable?
+    /// On screen now. Open with a song without words, the card is hidden, not closed.
+    private var shown = false
+    private var tuning: LyricsPanel?
+    private var tuningMonitors: [Any] = []
     /// Only while open: placements, the look, privacy, displays, keys.
     private var whileOpen: [AnyCancellable] = []
     private var monitors: [Any] = []
@@ -273,11 +275,19 @@ final class LyricsWindowController {
     }
 
     func start() {
-        openChanges = sing.$isOpen.removeDuplicates().dropFirst()
+        // `@Published` sends before the value changes: look on the next turn of the main queue.
+        let changes = Publishers.Merge3(sing.$isOpen.map { _ in () }, sing.$state.map { _ in () }, sing.$isEnabled.map { _ in () })
+        visibilityChanges = changes.dropFirst()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] open in
-                MainActor.assumeIsolated { open ? self?.show() : self?.hide() }
+            .sink { [weak self] in
+                MainActor.assumeIsolated { self?.updateVisibility() }
             }
+    }
+
+    private func updateVisibility() {
+        let visible = LyricsVisibility.showsCard(isOpen: sing.isOpen, isEnabled: sing.isEnabled, lyrics: sing.lyrics)
+        guard visible != shown else { return }
+        if visible { show() } else { hide() }
     }
 
     /// Where the card belongs now: the explanation's size while off, else the saved placement.
@@ -291,6 +301,7 @@ final class LyricsWindowController {
 
     private func show() {
         guard let screen = LyricsScreen.current(for: model.islandDisplay) else { sing.close(); return }
+        shown = true
         let panel = self.panel ?? makePanel()
         state.screen = screen
         state.hidesDetails = model.hidesDetails
@@ -308,6 +319,8 @@ final class LyricsWindowController {
     }
 
     private func hide() {
+        shown = false
+        closeTuning()
         stopWatching()
         guard let panel else { return }
         NSAnimationContext.runAnimationGroup({ context in
@@ -315,10 +328,9 @@ final class LyricsWindowController {
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, !self.sing.isOpen else { return }
+                guard let self, !self.shown else { return }
                 panel.orderOut(nil)
                 // Nothing stays behind: the view and its observers go with the window.
-                self.container?.setDrifting(false)
                 panel.contentView = nil
                 self.panel = nil
                 self.container = nil
@@ -331,6 +343,7 @@ final class LyricsWindowController {
         let view = LyricsView(sing: sing, window: state, model: model, actions: LyricsActions(
             close: { [weak self] in self?.sing.close() },
             choose: { [weak self] in self?.choose($0) },
+            tune: { [weak self] in self?.toggleTuning() },
             beginMove: { [weak self] in self?.beginMove() },
             move: { [weak self] in self?.move() },
             endMove: { [weak self] in self?.endMove() }))
@@ -357,6 +370,7 @@ final class LyricsWindowController {
             panel.invalidateShadow()
         }
         if state.frame != frame { state.frame = frame }
+        placeTuning()
         guard save, sing.isEnabled, let screen = state.screen else { return }
         sing.setPlacement(LyricsPlacement(preset: .custom, frame: screen.relative(frame)), for: screen.id)
         // Resized under the notch, it stays centred there.
@@ -393,8 +407,62 @@ final class LyricsWindowController {
         container?.apply(look)
         panel?.hasShadow = look.shadow && (look.opacity >= 0.1 || look.blur >= 0.1)
         panel?.invalidateShadow()
-        let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        container?.setDrifting(look.drift && !still && sing.track?.isPlaying == true)
+    }
+
+    // MARK: - Tuning
+
+    /// The card's own settings, live: a small panel attached to it. Its sliders and chips
+    /// are SwiftUI drags and buttons, which act on the first click, so it never needs to
+    /// take the keyboard either.
+    private func toggleTuning() {
+        if tuning != nil { closeTuning(); return }
+        guard let panel else { return }
+        let tuning = LyricsPanel()
+        tuning.hasShadow = true
+        let view = LyricsTuningView(sing: sing, window: state, actions: LyricsTuningActions(
+            choose: { [weak self] in self?.choose($0) },
+            settings: { [weak self] in
+                self?.closeTuning()
+                self?.model.openSettings(.media, anchor: "lyrics")
+            },
+            close: { [weak self] in self?.closeTuning() }))
+        tuning.contentView = FirstClickHostingView(rootView: view)
+        self.tuning = tuning
+        placeTuning()
+        panel.addChildWindow(tuning, ordered: .above)
+        tuning.orderFrontRegardless()
+        state.isTuning = true
+        // A click anywhere but the card or the panel puts it away.
+        let click: (NSEvent) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let tuning = self.tuning, let card = self.panel else { return }
+                let point = NSEvent.mouseLocation
+                if !tuning.frame.contains(point), !card.frame.contains(point) { self.closeTuning() }
+            }
+        }
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: click) {
+            tuningMonitors.append(monitor)
+        }
+        if let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { event in
+            click(event)
+            return event
+        }) { tuningMonitors.append(monitor) }
+    }
+
+    private func placeTuning() {
+        guard let tuning, let bounds = state.screen?.bounds else { return }
+        tuning.setFrame(LyricsTuning.frame(card: state.frame, within: bounds), display: true)
+    }
+
+    private func closeTuning() {
+        tuningMonitors.forEach(NSEvent.removeMonitor)
+        tuningMonitors = []
+        guard let tuning else { return }
+        panel?.removeChildWindow(tuning)
+        tuning.orderOut(nil)
+        tuning.contentView = nil
+        self.tuning = nil
+        state.isTuning = false
     }
 
     // MARK: - Moving it by dragging
@@ -443,9 +511,6 @@ final class LyricsWindowController {
         whileOpen.append(sing.$appearance.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
             MainActor.assumeIsolated { self?.applyLook() }
         })
-        whileOpen.append(sing.$track.map { $0?.isPlaying == true }.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] _ in
-            MainActor.assumeIsolated { self?.applyLook() }
-        })
         whileOpen.append(Publishers.CombineLatest3(model.$alwaysHideDetails, model.$hideDetailsWhileSharing, model.$screenShared)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -462,16 +527,15 @@ final class LyricsWindowController {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.screensChanged() }
         })
-        screenObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.applyLook() }
-        })
-        // Escape closes it: in other apps when LiveIsland may watch keys, and always in its own
-        // windows. The panel itself never takes the keyboard.
+        // Escape puts the tuning panel away, else closes the card: in other apps when
+        // LiveIsland may watch keys, and always in its own windows. Neither panel takes the
+        // keyboard.
         let key: (NSEvent) -> Bool = { [weak self] event in
             guard event.keyCode == Self.escape else { return false }
-            MainActor.assumeIsolated { self?.sing.close() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.tuning != nil { self.closeTuning() } else { self.sing.close() }
+            }
             return true
         }
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { _ = key($0) }) { monitors.append(monitor) }
@@ -482,10 +546,7 @@ final class LyricsWindowController {
         whileOpen.removeAll()
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
-        for observer in screenObservers {
-            NotificationCenter.default.removeObserver(observer)
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-        }
+        screenObservers.forEach(NotificationCenter.default.removeObserver)
         screenObservers = []
         moveStart = nil
     }

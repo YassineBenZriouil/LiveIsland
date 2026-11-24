@@ -186,7 +186,27 @@ public enum LyricsGeometry {
     }
 }
 
-/// Where the hover buttons (× and the menu) go: the card's top-right corner, unless the
+/// Where the card's tuning panel goes: under the card, its right edges lined up, else above it
+/// when there's no room below, always on the screen.
+public enum LyricsTuning {
+    public static let size = CGSize(width: 290, height: 540)
+    public static let gap: CGFloat = 6
+
+    public static func frame(size: CGSize = size, card: CGRect, within bounds: CGRect) -> CGRect {
+        var frame = CGRect(x: card.maxX - size.width, y: card.minY - gap - size.height, width: size.width, height: size.height)
+        if frame.minY < bounds.minY { frame.origin.y = card.maxY + gap }
+        if frame.maxY > bounds.maxY {
+            // No room above or below: beside the card, on whichever side has room.
+            frame.origin.y = bounds.maxY - size.height
+            frame.origin.x = card.minX - gap - size.width >= bounds.minX ? card.minX - gap - size.width : card.maxX + gap
+        }
+        frame.origin.x = min(max(frame.minX, bounds.minX), bounds.maxX - size.width)
+        frame.origin.y = min(max(frame.minY, bounds.minY), bounds.maxY - size.height)
+        return frame
+    }
+}
+
+/// Where the hover buttons (× and the tuning button) go: the card's top-right corner, unless the
 /// camera would hide them there; then its bottom-right.
 public enum LyricsControls {
     public static let size = CGSize(width: 54, height: 24)
@@ -326,9 +346,9 @@ public enum LyricsLineCount: String, Codable, CaseIterable, Identifiable, Sendab
 
 public enum LyricsOffset {
     public static let step: Double = 0.1
-    public static let range: ClosedRange<Double> = -10...10
+    public static let range: ClosedRange<Double> = -3...3
 
-    /// `value` moved by `steps` tenths of a second, rounded to a tenth, within ±10 s.
+    /// `value` moved by `steps` tenths of a second, rounded to a tenth, within ±3 s.
     public static func stepped(_ value: Double, by steps: Int) -> Double {
         let next = ((value + Double(steps) * step) * 10).rounded() / 10
         return min(max(next, range.lowerBound), range.upperBound)

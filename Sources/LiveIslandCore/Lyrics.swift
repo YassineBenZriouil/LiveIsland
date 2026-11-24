@@ -226,3 +226,27 @@ public struct LyricsTiming: Equatable, Sendable {
         return LyricsFill(index: index, progress: progress, remaining: remaining)
     }
 }
+
+/// Whether Sing With Me shows at all. A song without words (none found, instrumental, not
+/// looked up yet, still loading, or LRCLIB unreachable) hides it, quietly: hiding isn't
+/// closing, so it comes back by itself with the next song that has words.
+public enum LyricsVisibility {
+    /// The lyrics card. `isOpen` is the person's choice (only × or Escape undoes it);
+    /// `lyrics` is what was found for the song playing, nil while there's nothing yet.
+    /// While Sing With Me is off, an open card shows to ask.
+    public static func showsCard(isOpen: Bool, isEnabled: Bool, lyrics: Lyrics?) -> Bool {
+        guard isOpen else { return false }
+        return !isEnabled || hasWords(lyrics)
+    }
+
+    /// The Media tab's way in: the chip that offers Sing With Me while it's off, else the
+    /// card with the line being sung, only for a song with words.
+    public static func showsEntry(isEnabled: Bool, lyrics: Lyrics?) -> Bool {
+        !isEnabled || hasWords(lyrics)
+    }
+
+    public static func hasWords(_ lyrics: Lyrics?) -> Bool {
+        guard let lyrics, lyrics.kind != .instrumental else { return false }
+        return lyrics.lines.contains { !$0.isGap }
+    }
+}
