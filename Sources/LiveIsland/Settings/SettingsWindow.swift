@@ -228,6 +228,9 @@ private struct GeneralPage: View {
                     }
                 }
                 .disabled(!model.expandOnHover)
+                ToggleRow(symbol: "rectangle.expand.vertical", tint: .orange, title: "Open for a moment",
+                          detail: "For 2 seconds when an agent finishes, an account switches or headphones connect. Not with Reduce Motion.",
+                          isOn: $model.openOnMoments)
                 ToggleRow(symbol: "power", tint: .green, title: "Open at login",
                           isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
             }

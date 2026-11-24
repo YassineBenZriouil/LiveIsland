@@ -12,6 +12,12 @@ public enum IslandActivity: Equatable, Sendable {
     /// claude-swap just moved Claude Code to another account.
     case accountSwitched(to: String)
     case agentDone(AgentKind, project: String)
+    /// A limit that stopped the account in use just reset: it can work again ("Claude is back").
+    case limitReset(AgentKind, account: String)
+    /// The account in use ran out and no other has room: when the first one comes back.
+    case limitWaiting(AgentKind, account: String, resetsAt: Date)
+    /// At this pace, the account in use runs out before its limit resets.
+    case limitForecast(AgentKind, account: String, runsOutAt: Date)
     case headphonesConnected(name: String, battery: Int?)
     case charging(percent: Int)
     /// The Mac's battery (`device` nil) or a pair of headphones just got low.
@@ -33,11 +39,16 @@ public enum IslandActivity: Equatable, Sendable {
         case .lowBattery: return 86
         case .headphonesConnected: return 85
         case .charging: return 84
+        case .limitReset: return 83
         case .agentDone: return 80
+        // A meeting about to start is the more urgent of the two: it lasts minutes, the wait hours.
         case .eventSoon: return 75
+        case .limitWaiting: return 74
         case .cameraOn: return 70
         case .microphoneOn: return 65
         case .timer: return 60
+        // Beats the session that's using the account up: it's the reason to look now.
+        case .limitForecast: return 55
         case .agentWorking: return 50
         case .nowPlaying(_, let isPlaying): return isPlaying ? 40 : 10
         }

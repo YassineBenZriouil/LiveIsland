@@ -1,6 +1,9 @@
 import AppKit
 import LiveIslandCore
+import os
 import SwiftUI
+
+private let log = Logger(subsystem: "com.aissam.liveisland", category: "island")
 
 enum IslandTab: String, CaseIterable, Identifiable {
     case media = "Media"
@@ -112,8 +115,13 @@ final class IslandModel: ObservableObject {
     }
     /// macOS said no to notifications (or LiveIsland's are off in System Settings).
     @Published private(set) var notificationsDenied = false
-    /// Hidden over a full-screen app right now, as the island's window last said.
+    /// Hidden over a full-screen app right now, as the island's window last said. Opening the
+    /// island for a moment would show it there, so that waits too. Not published: nothing on
+    /// screen depends on it.
     private(set) var islandHidden = false
+    /// Open the island for a moment when an agent finishes, an account switches or headphones
+    /// connect. Never with Reduce Motion, while it's in use, or over something more important.
+    @Published var openOnMoments: Bool { didSet { save(openOnMoments, Key.moments) } }
     /// Whether LiveIsland asks GitHub once a day for a newer version (it never installs on its own).
     @Published var checkForUpdates: Bool {
         didSet {
@@ -185,6 +193,12 @@ final class IslandModel: ObservableObject {
     private let screen = ScreenWatcher()
     private let notifier = AgentNotifier()
     private var transientWork: DispatchWorkItem?
+    /// Closes an island that opened by itself for a moment; nil once someone uses it.
+    private var briefWork: DispatchWorkItem?
+    private var briefOpen = BriefOpen()
+    /// Notice a limit that reset, for "Claude is back".
+    private var claudeReturn = LimitReturn()
+    private var codexReturn = LimitReturn()
     private var clockTimer: Timer?
     private var playerRefresh: Timer?
     private var artworkCache: [String: ArtworkLook] = [:]
@@ -194,7 +208,7 @@ final class IslandModel: ObservableObject {
                                      Key.calendar: true, Key.claude: true, Key.codex: true, Key.hover: true,
                                      Key.hoverDelay: 0.12, Key.glow: true, Key.sounds: false, Key.players: true,
                                      Key.waveform: true, Key.updates: true, Key.fullScreen: false, Key.sharing: true,
-                                     Key.hideDetails: false])
+                                     Key.hideDetails: false, Key.moments: true])
         showMedia = defaults.bool(forKey: Key.media)
         showAgents = defaults.bool(forKey: Key.agents)
         showCalls = defaults.bool(forKey: Key.calls)
@@ -207,6 +221,7 @@ final class IslandModel: ObservableObject {
         ambientGlow = defaults.bool(forKey: Key.glow)
         agentSounds = defaults.bool(forKey: Key.sounds)
         notifyWhenHidden = defaults.bool(forKey: Key.notify)
+        openOnMoments = defaults.bool(forKey: Key.moments)
         liveWaveform = defaults.bool(forKey: Key.waveform)
         checkForUpdates = defaults.bool(forKey: Key.updates)
         tabOrder = Ordering.restore(defaults.stringArray(forKey: Key.tabOrder) ?? [], all: IslandTab.allCases, name: \.rawValue)
@@ -259,7 +274,10 @@ final class IslandModel: ObservableObject {
         levels.isEnabled = liveWaveform
         updater.checksAutomatically = checkForUpdates
         updater.start()
-        accountsMonitor.onUpdate = { [weak self] in self?.accountsState = $0 }
+        accountsMonitor.onUpdate = { [weak self] in
+            self?.accountsState = $0
+            self?.noticeLimitsComingBack()
+        }
         accountsMonitor.start()
         claudeSwap.onAccounts = { [weak self] in self?.accountsMonitor.claudeSwap = $0 }
         claudeSwap.onNotableEvent = { [weak self] in self?.announce($0) }
@@ -446,8 +464,11 @@ final class IslandModel: ObservableObject {
     }
 
     private func receive(_ next: AgentMonitor.Snapshot) {
+        let before = Dictionary(agents.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { first, _ in first })
+        let finished = next.sessions.first {
+            before[$0.id] == .working && $0.state == .done && ($0.kind == .claude ? showClaude : showCodex)
+        }
         if agentSounds {
-            let before = Dictionary(agents.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { first, _ in first })
             for session in next.sessions where before[session.id] == .working {
                 if session.state == .waiting { NSSound(named: "Funk")?.play(); break }
                 if session.state == .done { NSSound(named: "Glass")?.play(); break }
@@ -457,6 +478,9 @@ final class IslandModel: ObservableObject {
         notifier.observe(sessions, enabled: notifyWhenHidden && showAgents, unseen: islandHidden || isScreenAway,
                          hidingDetails: hidesDetails)
         accountsMonitor.observe(limits: next.claudeLimits, notice: next.claudeLimit, codexLimits: next.codexLimits)
+        if showAgents, let finished {
+            openBriefly(for: .agentDone(finished.kind, project: finished.project), on: .agents)
+        }
     }
 
     /// The island's window says when it hides over a full-screen app (and shows again).
@@ -541,16 +565,14 @@ final class IslandModel: ObservableObject {
         guard showAgents, case .swap(let inner) = event else { return }
         switch inner {
         case .switched(_, _, let to, false):
-            transient = .accountSwitched(to: "Codex · " + (to?.email ?? "another account"))
+            let moment = IslandActivity.accountSwitched(to: "Codex · " + (to?.email ?? "another account"))
+            show(moment, for: 6)
+            openBriefly(for: moment, on: .accounts, accounts: .codex)
         case .allExhausted, .quarantined, .error:
-            transient = .accountSwitched(to: "Codex · " + inner.summary)
+            show(.accountSwitched(to: "Codex · " + inner.summary), for: 6)
         default:
             return
         }
-        transientWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.transient = nil }
-        transientWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
     }
 
     /// claude-swap's automatic switching, in the notch: a switch, or every account running out.
@@ -559,16 +581,56 @@ final class IslandModel: ObservableObject {
         switch event {
         case .switched(_, _, let to, false):
             let name = claudeSwap.accounts?.first { $0.number == to?.number }?.name ?? to?.email ?? "another account"
-            transient = .accountSwitched(to: name)
+            show(.accountSwitched(to: name), for: 6)
+            openBriefly(for: .accountSwitched(to: name), on: .accounts, accounts: .claude)
         case .allExhausted, .quarantined, .error:
-            transient = .accountSwitched(to: event.summary)
+            show(.accountSwitched(to: event.summary), for: 6)
         default:
             return
         }
-        transientWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.transient = nil }
-        transientWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
+    }
+
+    // MARK: - Limits coming back
+
+    /// "Claude is back": the account in use was at its limit and the limit reset. Checked when
+    /// the accounts change and on the clock, which keeps ticking while a limit is shown.
+    private func noticeLimitsComingBack() {
+        let now = Date()
+        let claudeBack = claudeReturn.observe(accountsState.active, at: now)
+        let codexBack = codexReturn.observe(accountsState.activeCodex, at: now)
+        guard showAgents else { return }
+        if claudeBack, showClaude, let account = accountsState.active {
+            show(.limitReset(.claude, account: account.identity.displayName), for: 8)
+        } else if codexBack, showCodex, let account = accountsState.activeCodex {
+            show(.limitReset(.codex, account: account.identity.email), for: 8)
+        }
+    }
+
+    /// No account has room: the one that's back first, to count down to.
+    private func limitWait(_ kind: AgentKind) -> IslandActivity? {
+        let now = Date()
+        let list = kind == .claude ? accounts : codexAccounts
+        let exhausted = kind == .claude ? exhaustedAccount : exhaustedCodexAccount
+        guard let exhausted, (kind == .claude ? bestAccount : bestCodexAccount) == nil else { return nil }
+        // The one in use isn't always in the list (one account, nothing to switch with).
+        let candidates = list.contains { $0.id == exhausted.id } ? list : list + [exhausted]
+        guard let first = LimitWait.firstBack(candidates, at: now) else { return nil }
+        return .limitWaiting(kind, account: name(of: first.account), resetsAt: first.at)
+    }
+
+    /// When the account in use runs out at this pace, if it's before its limit resets; for
+    /// Claude, claude-swap's own projection of the week counts too.
+    func limitForecast(_ kind: AgentKind) -> Date? {
+        let now = Date()
+        guard let active = kind == .claude ? accountsState.active : accountsState.activeCodex else { return nil }
+        let swap = kind == .claude
+            ? active.claudeSwapNumber.flatMap { number in claudeSwap.accounts?.first { $0.number == number } }
+            : nil
+        return LimitForecast.runsOut(active, projected: swap?.projectedExhaustionAt, willLastToReset: swap?.willLastToReset, at: now)
+    }
+
+    private func name(of account: ClaudeAccount) -> String {
+        account.kind == .claude ? account.identity.displayName : account.identity.email
     }
 
     func forgetAccount(_ account: ClaudeAccount) {
@@ -633,6 +695,18 @@ final class IslandModel: ObservableObject {
         if showAgents, let exhausted = exhaustedCodexAccount, let best = bestCodexAccount {
             list.append(.accountLimit(account: "Codex · " + exhausted.identity.email, switchTo: best.identity.email))
         }
+        if showAgents {
+            if showClaude, let wait = limitWait(.claude) { list.append(wait) }
+            if showCodex, let wait = limitWait(.codex) { list.append(wait) }
+            // Only near the end, and while that agent works: hours ahead, or with nothing running,
+            // it's a number to look up, not a reason to look.
+            for kind in [AgentKind.claude, .codex] where sessions.contains(where: { $0.kind == kind && $0.state == .working }) {
+                guard let runsOut = limitForecast(kind), LimitForecast.isNear(runsOut, at: now),
+                      let active = kind == .claude ? accountsState.active : accountsState.activeCodex
+                else { continue }
+                list.append(.limitForecast(kind, account: name(of: active), runsOutAt: runsOut))
+            }
+        }
         if let transient { list.append(transient) }
         if showCalendar, let event = upcomingEvent(at: now) { list.append(.eventSoon(title: event.title, startsAt: event.start)) }
         if showCalls {
@@ -671,6 +745,8 @@ final class IslandModel: ObservableObject {
     /// Redraws the island only when the time alone changes what it shows; otherwise a 30 s
     /// bump would redraw every view for nothing, all day.
     private func tickClock() {
+        // A limit resets by the clock alone, with no new numbers to say so.
+        noticeLimitsComingBack()
         let now = Date()
         // As of the last redraw: a limit that reset since then is gone now, and must be redrawn away.
         let limitShown = showAgents && [accountsState.active, accountsState.activeCodex].contains {
@@ -691,6 +767,8 @@ final class IslandModel: ObservableObject {
     func setHovering(_ hovering: Bool, dwell: TimeInterval = 0) {
         guard hovering != isHovering else { return }
         isHovering = hovering
+        // Pointed at while open for a moment: it's theirs now, and closes the usual way.
+        if hovering { cancelBriefClose() }
         hoverWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -727,6 +805,7 @@ final class IslandModel: ObservableObject {
     }
 
     func collapse() {
+        cancelBriefClose()
         isExpanded = false
         accountsMonitor.isVisible = false
         claudeSwap.showingInIsland = false
@@ -740,7 +819,7 @@ final class IslandModel: ObservableObject {
     /// Opens on whatever the island is showing.
     private var suggestedTab: IslandTab {
         switch primary {
-        case .agentNeedsYou, .agentDone, .agentWorking: return .agents
+        case .agentNeedsYou, .agentDone, .agentWorking, .limitReset, .limitWaiting, .limitForecast: return .agents
         case .accountSwitched: return .accounts
         case .accountLimit(let account, _):
             accountsKind = account.hasPrefix("Codex") ? .codex : .claude
@@ -838,11 +917,62 @@ final class IslandModel: ObservableObject {
 
     private func flash(_ activity: IslandActivity) {
         guard showDevices else { return }
+        show(activity, for: 5)
+        if case .headphonesConnected = activity { openBriefly(for: activity, on: .activity) }
+    }
+
+    /// Something that just happened, in the closed notch for a few seconds.
+    private func show(_ activity: IslandActivity, for seconds: TimeInterval) {
         transient = activity
         transientWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.transient = nil }
         transientWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    // MARK: - Opening for a moment
+
+    /// Opens on `tab` for two seconds, like the iPhone's island when something happens, then
+    /// closes unless someone points at it. Only when it wouldn't be in the way: see `BriefOpen`.
+    private func openBriefly(for moment: IslandActivity, on tab: IslandTab, accounts kind: AgentKind? = nil) {
+        let outranked = (IslandActivity.mostImportant(activities)?.priority ?? 0) > moment.priority
+        let conditions = BriefOpen.Conditions(
+            enabled: openOnMoments,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+            expanded: isExpanded, hovering: isHovering,
+            unavailable: isMovingIsland || isScreenAway || isAsleep || islandHidden,
+            outranked: outranked)
+        guard briefOpen.shouldOpen(conditions, at: Date()) else { return }
+        if let kind { accountsKind = kind }
+        expand(on: tab)
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.briefWork != nil else { return }
+            self.briefWork = nil
+            if !self.isHovering { self.collapse() }
+        }
+        briefWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + BriefOpen.duration, execute: work)
+    }
+
+    private func cancelBriefClose() {
+        briefWork?.cancel()
+        briefWork = nil
+    }
+
+    // MARK: - Meetings
+
+    /// The call link of the event the island shows, when it has one.
+    func meetingLink(for event: CalendarProvider.Event) -> MeetingLink? {
+        event.meetingURL.flatMap(MeetingLink.recognize)
+    }
+
+    /// Opens the call in its app or the browser. Asynchronous: the synchronous open can wait
+    /// seconds on a sandbox check, and the island must not stall while it does.
+    func joinMeeting(_ url: URL) {
+        collapse()
+        NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            if let error { log.error("Couldn't open the meeting link: \(error.localizedDescription, privacy: .public)") }
+        }
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -881,5 +1011,6 @@ final class IslandModel: ObservableObject {
         static let fullScreen = "hideOverFullScreen"
         static let sharing = "hideDetailsWhileSharing"
         static let hideDetails = "alwaysHideDetails"
+        static let moments = "openOnMoments"
     }
 }
