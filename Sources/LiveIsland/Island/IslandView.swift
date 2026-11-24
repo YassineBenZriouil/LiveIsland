@@ -40,7 +40,10 @@ struct IslandView: View {
             .frame(width: size.width, height: size.height)
             .clipShape(shape)
             .contentShape(shape)
-            .onTapGesture { if !model.isExpanded { model.expand() } }
+            .onTapGesture {
+                // Tapping the island puts Sing With Me's words away.
+                if model.singWithMe.isOpen { model.closeLyrics() } else if !model.isExpanded { model.expand() }
+            }
             .overlay {
                 // While it follows the pointer, an outline shows where it will land.
                 if moving { shape.stroke(.white.opacity(0.5), lineWidth: 1) }

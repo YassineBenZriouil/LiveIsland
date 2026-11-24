@@ -47,4 +47,13 @@ enum ArtworkPalette {
     }
 
     static let fallback = NSColor(deviceWhite: 0.85, alpha: 1)
+
+    /// The accent deepened into a background that white words read on, as Spotify colors its
+    /// lyrics: the same hue, darker. A grey accent gives a charcoal.
+    static func deep(_ accent: NSColor) -> NSColor {
+        let color = accent.usingColorSpace(.deviceRGB) ?? fallback
+        guard color.saturationComponent > 0.12 else { return NSColor(deviceWhite: 0.16, alpha: 1) }
+        return NSColor(deviceHue: color.hueComponent, saturation: min(max(color.saturationComponent, 0.5), 0.85),
+                       brightness: 0.42, alpha: 1)
+    }
 }

@@ -527,6 +527,7 @@ private struct MediaSettingsPage: View {
             } header: {
                 Text("Waveform")
             }
+            SingWithMeSettings(sing: model.singWithMe)
             Section("Playing now") {
                 if model.players.isEmpty {
                     Text("Nothing is playing").foregroundStyle(.secondary)
@@ -941,6 +942,108 @@ private struct AutoBadge: View {
             Text("Auto").font(.system(size: 9.5, weight: .bold)).foregroundStyle(.green)
                 .padding(.horizontal, 5).padding(.vertical, 1)
                 .background(Capsule().fill(Color.green.opacity(0.15)))
+        }
+    }
+}
+
+/// Sing With Me: the switch, with what it sends, and the window's size, words and timing.
+private struct SingWithMeSettings: View {
+    @EnvironmentObject private var model: IslandModel
+    @ObservedObject var sing: SingWithMe
+
+    var body: some View {
+        Section {
+            ToggleRow(symbol: "music.mic", tint: .purple, title: "Sing With Me",
+                      detail: "The lyrics of the song playing, in time with it", isOn: $sing.isEnabled)
+            Text("Lyrics come from LRCLIB (lrclib.net), a free lyrics database. To find them, LiveIsland sends it the song's title, artist, album and length, and nothing else, only while a song plays and you're looking at the Media tab or the lyrics. Each song is asked for once and kept on this Mac.")
+                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button(sing.isOpen ? "Close Lyrics" : "Open Lyrics") { model.toggleLyrics() }
+                Spacer()
+                Text("Or liveisland://lyrics").font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        } header: {
+            Text("Sing With Me")
+        }
+        if sing.isEnabled {
+            if let screen = LyricsScreen.current(for: model.islandDisplay) {
+                size(on: screen)
+            }
+            Section("Lyrics") {
+                LabeledContent("Text size") {
+                    HStack {
+                        Slider(value: $sing.fontScale, in: LyricsTypography.scaleRange, step: 0.1).frame(width: 180)
+                        Text("\(Int((sing.fontScale * 100).rounded())) %").monospacedDigit().frame(width: 48, alignment: .trailing)
+                    }
+                }
+                Picker("Align", selection: $sing.alignment) {
+                    ForEach(LyricsAlignment.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                LabeledContent("Timing") {
+                    HStack {
+                        Text(LyricsOffset.label(sing.offset)).monospacedDigit()
+                        Stepper("Timing", value: Binding(get: { sing.offset }, set: { sing.offset = LyricsOffset.stepped($0, by: 0) }),
+                                in: LyricsOffset.range, step: LyricsOffset.step)
+                            .labelsHidden()
+                        Button("Reset") { sing.offset = 0 }.disabled(sing.offset == 0)
+                    }
+                }
+                Text("If the words run ahead of the song or behind it, move them by a tenth of a second at a time.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// The window's size on the island's display: a preset, or exact numbers (which make it
+    /// custom). Dragging its edges does the same.
+    private func size(on screen: LyricsScreen) -> some View {
+        let placement = sing.placement(for: screen.id)
+        let frame = screen.frame(for: placement)
+        let bounds = screen.bounds
+        func apply(width: CGFloat, height: CGFloat) {
+            let next = LyricsGeometry.sized(frame, width: width, height: height, within: bounds)
+            sing.setPlacement(LyricsPlacement(preset: .custom, frame: next.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)), for: screen.id)
+        }
+        func field(_ title: String, value: CGFloat, whole: CGFloat, set: @escaping (CGFloat) -> Void) -> some View {
+            LabeledContent(title) {
+                HStack(spacing: 6) {
+                    TextField(title, value: Binding(
+                        get: { sing.sizeInPercent ? Double((value / whole * 100).rounded()) : Double(value.rounded()) },
+                        set: { set(sing.sizeInPercent ? CGFloat($0) / 100 * whole : CGFloat($0)) }), format: .number)
+                        .labelsHidden()
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 70)
+                    Text(sing.sizeInPercent ? "%" : "pt").foregroundStyle(.secondary).frame(width: 20, alignment: .leading)
+                }
+            }
+        }
+        return Section {
+            Picker("Size", selection: Binding(get: { placement.preset }, set: { preset in
+                if preset == .custom {
+                    sing.setPlacement(LyricsPlacement(preset: .custom, frame: frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)), for: screen.id)
+                } else {
+                    sing.setPlacement(LyricsPlacement(preset: preset), for: screen.id)
+                }
+            })) {
+                ForEach(LyricsPreset.allCases) { Text($0.title).tag($0) }
+            }
+            field("Width", value: frame.width, whole: bounds.width) { apply(width: $0, height: frame.height) }
+            field("Height", value: frame.height, whole: bounds.height) { apply(width: frame.width, height: $0) }
+            Picker("Units", selection: $sing.sizeInPercent) {
+                Text("Points").tag(false)
+                Text("% of the screen").tag(true)
+            }
+            .pickerStyle(.segmented)
+            HStack {
+                Text("Drag any edge or corner of the window to resize it, and its top to move it. Sizes are kept for each display.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Reset Size") { sing.resetSize(for: screen.id) }
+                    .disabled(placement == .standard)
+            }
+        } header: {
+            Text("Lyrics window")
         }
     }
 }

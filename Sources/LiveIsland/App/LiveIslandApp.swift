@@ -20,6 +20,7 @@ struct LiveIslandApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = IslandModel()
     private var island: IslandController?
+    private var lyrics: LyricsWindowController?
     private var terminationSignal: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -27,6 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let island = IslandController(model: model)
         island.show()
         self.island = island
+        let lyrics = LyricsWindowController(model: model)
+        lyrics.start()
+        self.lyrics = lyrics
         // `kill` and `pkill` send SIGTERM: quit properly, so the media adapter goes too.
         signal(SIGTERM, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
@@ -42,7 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// liveisland:// links, e.g. from Shortcuts: open[/media|agents|activity|accounts[/claude|codex]], close,
     /// settings[/general|island|media|agents|accounts[/claude|codex][/accounts|automatic|console]|updates|about], update[/install], timer/<minutes>,
     /// switch/best, switch/<n>, switch/codex/best, switch/codex/<n>,
-    /// move (the island follows the pointer until ⌘), move/top (back on the top edge).
+    /// move (the island follows the pointer until ⌘), move/top (back on the top edge),
+    /// lyrics[/open|close] (Sing With Me's window; while it's off, opening only asks).
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.scheme == "liveisland" {
             Logger(subsystem: "com.aissam.liveisland", category: "url").notice("Open \(url.absoluteString, privacy: .public)")
@@ -78,6 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     model.openSettings(.accounts, anchor: "codex" + (rest.isEmpty ? "" : "/" + rest))
                 } else {
                     model.openSettings(detail.flatMap(SettingsSection.init(rawValue:)) ?? .general, anchor: rest.isEmpty ? nil : rest)
+                }
+            case "lyrics":
+                switch LinkValue.lyricsAction(detail) {
+                case .toggle: model.toggleLyrics()
+                case .open: model.openLyrics()
+                case .close: model.closeLyrics()
+                case nil: break
                 }
             case "timer":
                 // At most a day: "inf" or "1e20" would otherwise reach the clock.

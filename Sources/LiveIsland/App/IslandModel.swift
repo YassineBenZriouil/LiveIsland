@@ -56,14 +56,22 @@ final class IslandModel: ObservableObject {
     // Live data
     /// The app the system's media controls point at (any app: browsers, Music, Spotify, …).
     @Published private(set) var systemPlayer: NowPlaying? {
-        didSet { levels.isPlaying = players.contains(where: \.isPlaying) }
+        didSet {
+            levels.isPlaying = players.contains(where: \.isPlaying)
+            singWithMe.update(track: nowPlaying)
+        }
     }
     /// Spotify and Music, read directly, so they show even when another app has the controls.
     @Published private(set) var scriptedPlayers: [NowPlaying] = [] {
-        didSet { levels.isPlaying = players.contains(where: \.isPlaying) }
+        didSet {
+            levels.isPlaying = players.contains(where: \.isPlaying)
+            singWithMe.update(track: nowPlaying)
+        }
     }
     /// The player picked in the island; nil follows whatever is playing.
-    @Published var selectedPlayerID: String?
+    @Published var selectedPlayerID: String? {
+        didSet { singWithMe.update(track: nowPlaying) }
+    }
     @Published private(set) var output: OutputVolume.State?
     /// Spotify and Music tracks played since launch, newest first.
     @Published private(set) var history: [PlayedTrack] = []
@@ -89,6 +97,7 @@ final class IslandModel: ObservableObject {
     @Published private(set) var isHovering = false
     @Published var tab: IslandTab = .media {
         didSet {
+            singWithMe.cardVisible = isExpanded && tab == .media
             accountsMonitor.isVisible = isExpanded && tab == .accounts
             claudeSwap.showingInIsland = isExpanded && tab == .accounts
             codexSwap.showingInIsland = isExpanded && tab == .accounts
@@ -212,6 +221,8 @@ final class IslandModel: ObservableObject {
     let focus = FocusStatus()
     let levels = AudioLevelMeter()
     let updater = Updater()
+    /// Lyrics for the song playing (off until the person turns it on).
+    let singWithMe = SingWithMe()
     let claudeSwap = ClaudeSwapController()
     let codexSwap = CodexSwapController()
     /// The global shortcut that opens the island and steps through its tabs.
@@ -314,6 +325,11 @@ final class IslandModel: ObservableObject {
         }
         systemMonitor.onEvent = { [weak self] in self?.flash($0) }
         calendar.onUpdate = { [weak self] in self?.events = $0 }
+        singWithMe.seek = { [weak self] in self?.seek(to: $0) }
+        singWithMe.refreshPlayers = { [weak self] in
+            guard let self, self.controlPlayers else { return }
+            self.scripted.refreshAll()
+        }
         media.start()
         volume.start()
         levels.isEnabled = liveWaveform
@@ -363,6 +379,7 @@ final class IslandModel: ObservableObject {
 
 
     func stop() {
+        singWithMe.close()
         media.stop()
         volume.stop()
         microphone.stop()
@@ -510,6 +527,21 @@ final class IslandModel: ObservableObject {
         } else {
             media.seek(to: seconds)
         }
+    }
+
+    // MARK: - Sing With Me
+
+    /// Opens the lyrics window (asking first while Sing With Me is off); the island closes
+    /// so the words aren't hidden behind it.
+    func openLyrics() {
+        collapse()
+        singWithMe.open()
+    }
+
+    func closeLyrics() { singWithMe.close() }
+
+    func toggleLyrics() {
+        if singWithMe.isOpen { closeLyrics() } else { openLyrics() }
     }
 
     func skip(by seconds: Double) {
@@ -850,6 +882,7 @@ final class IslandModel: ObservableObject {
         guard !isExpanded else { return }
         tab = Ordering.pick(requested ?? suggestedTab, in: visibleTabs) ?? .activity
         isExpanded = true
+        singWithMe.cardVisible = tab == .media
         accountsMonitor.isVisible = tab == .accounts
         claudeSwap.showingInIsland = tab == .accounts
         codexSwap.showingInIsland = tab == .accounts
@@ -869,6 +902,7 @@ final class IslandModel: ObservableObject {
     func collapse() {
         cancelBriefClose()
         isExpanded = false
+        singWithMe.cardVisible = false
         showsWelcome = false
         accountsMonitor.isVisible = false
         claudeSwap.showingInIsland = false

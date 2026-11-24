@@ -163,6 +163,9 @@ public struct LyricsHeaderLayout: Equatable, Sendable {
     /// Where the camera's gap starts and how wide it is, in the window's coordinates; nil when
     /// the header doesn't meet the notch.
     public var gap: ClosedRange<CGFloat>?
+    /// How tall the header is: at least `LyricsTypography.headerHeight`, and beside the camera
+    /// at least as tall as the part of the window it hides, so the words start below it.
+    public var height: CGFloat
 
     public static let margin: CGFloat = 10
     public static let leastLeading: CGFloat = 150
@@ -179,18 +182,21 @@ public struct LyricsHeaderLayout: Equatable, Sendable {
         let end = min(panel.width, notch.maxX - panel.minX + Self.margin)
         let leading = start, trailing = panel.width - end
         if leading >= Self.leastLeading, trailing >= Self.leastTrailing {
-            self.init(topInset: 0, leadingWidth: leading, trailingWidth: trailing, gap: start...end)
+            self.init(topInset: 0, leadingWidth: leading, trailingWidth: trailing, gap: start...end,
+                      height: max(LyricsTypography.headerHeight, panel.maxY - notch.minY))
         } else {
             // Too little room beside the camera: the whole header goes under it.
             self.init(topInset: max(0, panel.maxY - notch.minY), leadingWidth: panel.width, trailingWidth: panel.width, gap: nil)
         }
     }
 
-    public init(topInset: CGFloat, leadingWidth: CGFloat, trailingWidth: CGFloat, gap: ClosedRange<CGFloat>?) {
+    public init(topInset: CGFloat, leadingWidth: CGFloat, trailingWidth: CGFloat, gap: ClosedRange<CGFloat>?,
+                height: CGFloat = LyricsTypography.headerHeight) {
         self.topInset = topInset
         self.leadingWidth = leadingWidth
         self.trailingWidth = trailingWidth
         self.gap = gap
+        self.height = height
     }
 }
 
