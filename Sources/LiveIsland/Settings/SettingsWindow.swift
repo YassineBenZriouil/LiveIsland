@@ -488,6 +488,9 @@ private struct AgentsSettingsPage: View {
             }
             AccountsShortcutSection()
             Section {
+                if model.agents.claudeLimits == nil, let jq = ClaudeStatusLine.missingJQNote {
+                    Label(jq, systemImage: "exclamationmark.triangle.fill").font(.system(size: 12)).foregroundStyle(.orange)
+                }
                 if ClaudeStatusLine.needsUpdate {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Your status line has LiveIsland's lines from an earlier version, which don't say which session reported the limits. Update them so each account gets its own numbers.")

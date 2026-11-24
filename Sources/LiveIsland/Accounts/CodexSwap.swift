@@ -43,6 +43,7 @@ final class CodexSwapController: ObservableObject {
         didSet {
             guard autoSwitch != oldValue else { return }
             UserDefaults.standard.set(autoSwitch, forKey: Self.autoKey)
+            backoff.reset()
             autoSwitch ? startAuto() : stopAuto()
         }
     }
@@ -54,8 +55,15 @@ final class CodexSwapController: ObservableObject {
     private static let autoTitle = "$ ccswap codex auto --json"
     private var autoProcess: Process?
     private var autoBuffer = Data()
-    private var autoFailures = 0
+    private var autoStartedAt: Date?
+    private var backoff = RestartBackoff()
     private var restartWork: DispatchWorkItem?
+    /// Waiting for a new account's sign-in, until it's added or the person cancels.
+    private var signIn: (task: Task<Void, Never>, directory: URL, name: String)?
+    /// ccswap is reading the new login: too late to cancel, since its folder must stay put.
+    private var signInIsAdding = false
+    /// Whether Cancel can stop the sign-in in progress.
+    var canCancelAdding: Bool { signIn != nil && !signInIsAdding }
     private var refreshTimer: Timer?
     private var stopping = false
     private var minutes = 0
@@ -88,6 +96,7 @@ final class CodexSwapController: ObservableObject {
             await refresh()
             await loadSettings()
             countLegacyLogins()
+            removeImportFolders()
             await endOrphanedLoops()
             // Only once it's there: a Mac without it has nothing to start yet.
             if autoSwitch, executable != nil { startAuto() }
@@ -179,8 +188,9 @@ final class CodexSwapController: ObservableObject {
         guard busy == nil, executable != nil else { return }
         busy = "Updating ccswap…"
         defer { busy = nil }
-        let wasRunning = autoProcess != nil
-        if wasRunning { stopAuto() }
+        // A loop waiting to start again counts too: it mustn't start mid-update.
+        let wasRunning = autoProcess != nil || restartWork != nil
+        stopAuto()
         let before = version
         let result: Result
         if let uv = Self.tool(["uv"]) {
@@ -222,7 +232,8 @@ final class CodexSwapController: ObservableObject {
         let list = await ccswap(["codex", "list", "--json"], quiet: true)
         if let found = CodexSwapCommand.newerVersion(in: list.text) { newerVersion = found }
         guard CodexSwapJSON.accounts(list: list.output) != nil else {
-            if list.status != 0 { log.error("ccswap codex list failed: \(list.text, privacy: .public)") }
+            // Its output can hold account emails: only the exit code is public.
+            if list.status != 0 { log.error("ccswap codex list failed (exit \(list.status, privacy: .public)): \(list.text, privacy: .private)") }
             return
         }
         // Usage asks OpenAI, one request per account: skip it when there are none.
@@ -300,7 +311,7 @@ final class CodexSwapController: ObservableObject {
 
     /// Signs a new account in with Codex's own sign-in, in a folder of its own (so the account
     /// Codex uses now stays as it is), adds it to ccswap, then deletes that folder: ccswap
-    /// keeps the login.
+    /// keeps the login. When ccswap can't add it, the folder stays, so the sign-in isn't lost.
     func addAccount() {
         let name = newAccountName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, adding == nil else { return }
@@ -314,31 +325,54 @@ final class CodexSwapController: ObservableObject {
         newAccountName = ""
         adding = "Sign in to “\(name)” in the browser that Terminal opens…"
         note("Signing in a new Codex account")
-        openInTerminal("""
+        // The name is the person's own text: quoted, so a " or $(…) in it stays text.
+        let script = openInTerminal("""
         unset OPENAI_API_KEY
-        export CODEX_HOME=\(Self.quoted(directory.path))
-        echo "Sign in to the ChatGPT account “\(name)” for LiveIsland and ccswap."
+        export CODEX_HOME=\(Shell.quoted(directory.path))
+        \(Shell.echo("Sign in to the ChatGPT account “\(name)” for LiveIsland and ccswap."))
         codex login
         echo
         echo "Done: LiveIsland adds it to ccswap now. You can close this window."
         """, name: "add codex account")
-        Task { await waitForSignIn(in: directory, name: name) }
+        let task = Task { [weak self] in
+            await self?.waitForSignIn(in: directory, name: name)
+            if let script { try? FileManager.default.removeItem(at: script) }
+        }
+        signIn = (task, directory, name)
+    }
+
+    /// Stops waiting for the sign-in started by Add Account, and deletes its folder.
+    func cancelAdding() {
+        guard let signIn, !signInIsAdding else { return }
+        self.signIn = nil
+        signIn.task.cancel()
+        try? FileManager.default.removeItem(at: signIn.directory)
+        adding = nil
+        note("Stopped adding “\(signIn.name)”. If Terminal is still signing in, close its window.")
     }
 
     private func waitForSignIn(in directory: URL, name: String) async {
         defer {
-            adding = nil
-            try? FileManager.default.removeItem(at: directory)
+            if !Task.isCancelled { adding = nil; signIn = nil; signInIsAdding = false }
         }
         let auth = directory.appendingPathComponent("auth.json")
         for _ in 0..<100 {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if Task.isCancelled { return }
             guard let data = try? Data(contentsOf: auth), CodexLogin.identity(in: data) != nil else { continue }
             adding = "Adding “\(name)” to ccswap…"
-            _ = await ccswap(["codex", "add"], environment: ["CODEX_HOME": directory.path])
+            signInIsAdding = true
+            let result = await ccswap(["codex", "add"], environment: ["CODEX_HOME": directory.path])
             await refresh()
+            if result.status == 0 {
+                try? FileManager.default.removeItem(at: directory)
+                note("Added “\(name)” to ccswap.")
+            } else {
+                note("ccswap couldn't add “\(name)” (exit \(result.status)): see its output above. The sign-in is kept in \((directory.path as NSString).abbreviatingWithTildeInPath), so you can add it from there (CODEX_HOME=that folder ccswap codex add) or delete the folder.", error: true)
+            }
             return
         }
+        try? FileManager.default.removeItem(at: directory)
         note("“\(name)” wasn't signed in within five minutes. Try Add Account again.", error: true)
     }
 
@@ -366,27 +400,52 @@ final class CodexSwapController: ObservableObject {
         defer { busy = nil }
         let active = (try? Data(contentsOf: URL(fileURLWithPath: Self.codexHome).appendingPathComponent("auth.json")))
             .flatMap(CodexLogin.identity(in:))?.key
-        var added = 0
+        var added = 0, failed = 0
+        defer { removeImportFolders() }
         for file in Self.legacyFiles() {
-            guard let data = try? Data(contentsOf: file), let identity = CodexLogin.identity(in: data) else { continue }
+            guard let data = try? Data(contentsOf: file), let identity = CodexLogin.identity(in: data) else { failed += 1; continue }
             if identity.key == active {
-                if await ccswap(["codex", "add"]).status == 0 { added += 1 }
+                if await ccswap(["codex", "add"]).status == 0 { added += 1 } else { failed += 1 }
                 continue
             }
-            let directory = Self.home.appendingPathComponent("import-\(UUID().uuidString.prefix(8))", isDirectory: true)
+            let directory = Self.home.appendingPathComponent("\(Self.importPrefix)\(UUID().uuidString.prefix(8))", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             guard (try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil,
                   FileManager.default.createFile(atPath: directory.appendingPathComponent("auth.json").path, contents: data, attributes: [.posixPermissions: 0o600])
-            else { continue }
-            if await ccswap(["codex", "add"], environment: ["CODEX_HOME": directory.path]).status == 0 { added += 1 }
+            else { failed += 1; continue }
+            if await ccswap(["codex", "add"], environment: ["CODEX_HOME": directory.path]).status == 0 { added += 1 } else { failed += 1 }
         }
-        note("Added \(added) saved login\(added == 1 ? "" : "s") to ccswap. A login Codex refreshed since it was saved may need codex login once more.")
+        var text = "Added \(added) saved login\(added == 1 ? "" : "s") to ccswap. A login Codex refreshed since it was saved may need codex login once more."
+        if failed > 0 { text += " \(failed) couldn't be added: see the output above." }
+        note(text, error: failed > 0)
         await refresh()
     }
 
+    private static let importPrefix = "import-"
+
+    /// The private folders an import passes each login through. Each is deleted right after its
+    /// login is added, but a crash mid-import would leave one, with a login in it.
+    private func removeImportFolders() {
+        let fileManager = FileManager.default
+        let folders = (try? fileManager.contentsOfDirectory(at: Self.home, includingPropertiesForKeys: nil)) ?? []
+        for folder in folders where folder.lastPathComponent.hasPrefix(Self.importPrefix) {
+            do {
+                try fileManager.removeItem(at: folder)
+            } catch {
+                log.error("Couldn't delete an import folder: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
     func deleteLegacyLogins() {
-        try? FileManager.default.removeItem(at: Self.legacyFolder)
-        note("Deleted the Codex logins earlier versions of LiveIsland kept.")
+        do {
+            try FileManager.default.removeItem(at: Self.legacyFolder)
+            note("Deleted the Codex logins earlier versions of LiveIsland kept.")
+        } catch CocoaError.fileNoSuchFile {
+            note("The Codex logins earlier versions of LiveIsland kept are already gone.")
+        } catch {
+            note("Couldn't delete \((Self.legacyFolder.path as NSString).abbreviatingWithTildeInPath): \(error.localizedDescription) Delete it in Finder.", error: true)
+        }
         countLegacyLogins()
     }
 
@@ -398,11 +457,16 @@ final class CodexSwapController: ObservableObject {
             return
         }
         restartWork?.cancel()
+        restartWork = nil
         stopping = false
+        // A line cut short by the loop that ended mustn't run into the new one's first.
+        autoBuffer.removeAll()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["codex", "auto", "--json"]
-        process.environment = environment()
+        var loopEnvironment = environment()
+        loopEnvironment[AutoLoopMark.key] = Self.loopMark
+        process.environment = loopEnvironment
         process.standardInput = FileHandle.nullDevice
         let output = Pipe(), errors = Pipe()
         process.standardOutput = output
@@ -438,20 +502,55 @@ final class CodexSwapController: ObservableObject {
         do {
             try process.run()
             autoProcess = process
+            autoStartedAt = Date()
+            recordLoop(process)
             auto = .running(since: Date())
             append(Entry(at: Date(), kind: .command, title: Self.autoTitle, output: "Automatic switching is on: ccswap checks every Codex account and switches before one runs out. Codex sessions pick up the new account when restarted.", isRunning: true))
         } catch {
-            note("Couldn't start automatic switching: \(error.localizedDescription)", error: true)
+            for pipe in [output, errors] { pipe.fileHandleForReading.readabilityHandler = nil }
+            let why = "Couldn't start automatic switching (\(error.localizedDescription))"
+            // Same as a crash: try again later, so "on" doesn't quietly mean nothing runs.
+            if autoSwitch, !stopping { scheduleRestart(why: why, ran: nil) } else { note(why, error: true) }
         }
     }
 
-    /// A loop left by a LiveIsland that crashed would keep switching on its own: end it.
+    /// What LiveIsland marks its own loops with (see `AutoLoopMark`).
+    private static let loopMark = "ccswap"
+
+    /// A loop left by a LiveIsland that crashed would keep switching on its own: end it. Only
+    /// loops LiveIsland started carry its mark; one the person runs in Terminal is left alone.
     private func endOrphanedLoops() async {
         let found = await run("/usr/bin/pgrep", ["-P", "1", "-f", "ccswap codex auto --json"], title: nil, environment: installEnvironment(), quiet: true)
+        let recorded = AutoLoopMark.pids(in: (try? String(contentsOf: Self.loopRecord, encoding: .utf8)) ?? "")
         for pid in found.text.split(whereSeparator: \.isNewline).compactMap({ Int32($0) }) {
+            guard pid != autoProcess?.processIdentifier,
+                  AutoLoopMark.isLiveIslands(pid: pid, started: Self.arguments(of: pid), recorded: recorded, tool: Self.loopMark)
+            else { continue }
             kill(pid, SIGTERM)
             log.notice("Ended a ccswap codex auto loop left from an earlier run")
         }
+        if autoProcess == nil { recordLoop(nil) }
+    }
+
+    /// Where the running loop's process ID is written down, for `endOrphanedLoops`.
+    private static var loopRecord: URL { home.appendingPathComponent("auto-loop.pid") }
+
+    private func recordLoop(_ process: Process?) {
+        if let process {
+            try? "\(process.processIdentifier)\n".write(to: Self.loopRecord, atomically: true, encoding: .utf8)
+        } else {
+            try? FileManager.default.removeItem(at: Self.loopRecord)
+        }
+    }
+
+    /// What a process of the person's was started with. nil when the kernel won't say.
+    private static func arguments(of pid: pid_t) -> ProcessArguments? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
+        return ProcessArguments.parse(Data(buffer.prefix(size)))
     }
 
     private func stopAuto() {
@@ -459,6 +558,8 @@ final class CodexSwapController: ObservableObject {
         restartWork = nil
         guard let process = autoProcess else { auto = .off; return }
         autoProcess = nil
+        autoStartedAt = nil
+        recordLoop(nil)
         process.terminate()
         auto = .off
         if let index = entries.lastIndex(where: { $0.title == Self.autoTitle && $0.isRunning }) { entries[index].isRunning = false }
@@ -476,7 +577,6 @@ final class CodexSwapController: ObservableObject {
             let line = autoBuffer[autoBuffer.startIndex..<newline]
             autoBuffer.removeSubrange(autoBuffer.startIndex...newline)
             guard let parsed = CodexSwapEvent.parse(Data(line)) else { continue }
-            autoFailures = 0
             let event = parsed.event
             lastEvent = (event.summary, parsed.at ?? Date())
             var isError = false
@@ -498,15 +598,27 @@ final class CodexSwapController: ObservableObject {
             entries[index].isRunning = false
             entries[index].exitCode = status
         }
+        let ran = autoStartedAt.map { Date().timeIntervalSince($0) }
+        autoStartedAt = nil
+        recordLoop(nil)
         guard autoSwitch, !stopping else { auto = .off; return }
-        // It shouldn't stop on its own: start it again, waiting longer each time.
-        autoFailures += 1
-        let delays: [TimeInterval] = [5, 15, 60, 300]
-        let delay = delays[min(autoFailures - 1, delays.count - 1)]
-        let why = "ccswap codex auto stopped (code \(status))"
+        // It shouldn't stop on its own: start it again.
+        scheduleRestart(why: "ccswap codex auto stopped (code \(status))", ran: ran)
+    }
+
+    /// Starts the loop again later, waiting longer after each quick stop (`RestartBackoff`).
+    private func scheduleRestart(why: String, ran: TimeInterval?) {
+        restartWork?.cancel()
+        let delay = backoff.delay(afterRunning: ran)
         auto = .restarting(at: Date().addingTimeInterval(delay), why: why)
         note("\(why): starting it again in \(Int(delay)) s", error: true)
-        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.startAuto() } }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.autoSwitch, !self.stopping else { return }
+                self.restartWork = nil
+                self.startAuto()
+            }
+        }
         restartWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
@@ -552,26 +664,23 @@ final class CodexSwapController: ObservableObject {
             let text = String(decoding: chunk, as: UTF8.self)
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.extend(entryID, with: text) } }
         }
-        output.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty { handle.readabilityHandler = nil } else { stream(chunk, true) }
-        }
-        errors.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty { handle.readabilityHandler = nil } else { stream(chunk, false) }
-        }
-        let status: Int32 = await withCheckedContinuation { continuation in
-            process.terminationHandler = { process in
-                // Let the last output arrive.
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { continuation.resume(returning: process.terminationStatus) }
+        // Done only once it has exited and both pipes are at EOF: a big `list --json` is
+        // complete only then. Past the timeout it's stopped, and killed if it won't stop.
+        let status: Int32
+        do {
+            let outcome = try await ProcessRunner.watch(process, pipes: [output, errors], timeout: timeout) { chunk, index in
+                stream(chunk, index == 0)
             }
-            do {
-                try process.run()
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
-            } catch {
-                collected.add(Data(error.localizedDescription.utf8), isOutput: false)
-                continuation.resume(returning: -1)
+            status = outcome.status
+            if outcome.timedOut {
+                let text = "\nStopped: it didn't finish within \(Int(timeout)) s."
+                collected.add(Data(text.utf8), isOutput: false)
+                if let entryID { extend(entryID, with: text) }
             }
+        } catch {
+            collected.add(Data(error.localizedDescription.utf8), isOutput: false)
+            if let entryID { extend(entryID, with: error.localizedDescription) }
+            status = -1
         }
         let result = Result(status: status, output: collected.output, text: collected.text)
         if let entryID {
@@ -634,19 +743,34 @@ final class CodexSwapController: ObservableObject {
         append(Entry(at: Date(), kind: .note, title: text, isError: error))
     }
 
-    private func openInTerminal(_ body: String, name: String) {
-        let script = FileManager.default.temporaryDirectory.appendingPathComponent("LiveIsland \(name).command")
+    /// Writes `body` to a script of its own (a second Add Account must never overwrite the
+    /// first's while Terminal reads it) and opens it in the app that runs `.command` files.
+    /// Returns the script, for the caller to delete once it's done with it.
+    @discardableResult
+    private func openInTerminal(_ body: String, name: String) -> URL? {
+        let script = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LiveIsland \(name) \(UUID().uuidString.prefix(8)).command")
         do {
             try ("#!/bin/zsh -l\n" + body + "\n").write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
-            NSWorkspace.shared.open(script)
         } catch {
             note("Couldn't open Terminal: \(error.localizedDescription)", error: true)
+            return nil
         }
-    }
-
-    private static func quoted(_ text: String) -> String {
-        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let workspace = NSWorkspace.shared
+        guard let app = workspace.urlForApplication(toOpen: script)
+                ?? workspace.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else {
+            note("Couldn't find Terminal to sign in.", error: true)
+            return script
+        }
+        // The asynchronous open: the plain one can hold the main thread for seconds.
+        workspace.open([script], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+            guard let error else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.note("Couldn't open Terminal: \(error.localizedDescription)", error: true) }
+            }
+        }
+        return script
     }
 
     /// How an argument reads in the console: quoted when it has spaces.

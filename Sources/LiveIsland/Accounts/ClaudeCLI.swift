@@ -14,15 +14,17 @@ enum ClaudeCLI {
     }
 
     /// The PATH of the person's login shell, so a task finds the same tools (git, swift, node…)
-    /// it would in Terminal. An app opened from the Dock only gets the system's.
-    private(set) static var shellPath = "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    /// it would in Terminal. An app opened from the Dock only gets the system's. Both account
+    /// controllers load it at once from different tasks, so it's kept behind a lock.
+    static var shellPath: String { ShellPath.shared.value }
 
-    static func loadShellPath() async {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        guard let data = try? await ProcessRunner.output(shell, ["-l", "-c", "printf %s \"$PATH\""]),
-              let path = String(data: data, encoding: .utf8), path.contains("/usr/bin")
-        else { return }
-        shellPath = path
+    /// How long a login shell gets to print its PATH. A profile that waits on something (a
+    /// prompt, a backgrounded job holding the terminal) would otherwise hold up the accounts.
+    static let shellPathTimeout: TimeInterval = 5
+
+    /// Asks the login shell once; later calls wait for that same answer.
+    static func loadShellPath(timeout: TimeInterval = shellPathTimeout) async {
+        await ShellPath.shared.load(timeout: timeout).value
     }
 
     /// The environment for running Claude Code: the account it uses now (claude-swap moves it),
@@ -41,5 +43,41 @@ enum ClaudeCLI {
     /// Where Claude Code keeps conversations.
     static var projectsDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
+    }
+}
+
+/// The shell's PATH, read and written from any thread.
+private final class ShellPath: @unchecked Sendable {
+    static let shared = ShellPath()
+
+    private let lock = NSLock()
+    private var path = "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    private var loading: Task<Void, Never>?
+
+    var value: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return path
+    }
+
+    func load(timeout: TimeInterval) -> Task<Void, Never> {
+        lock.lock()
+        defer { lock.unlock() }
+        if let loading { return loading }
+        let task = Task.detached { [self] in
+            let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+            guard let data = try? await ProcessRunner.output(shell, ["-l", "-c", "printf %s \"$PATH\""], timeout: timeout),
+                  let found = String(data: data, encoding: .utf8), found.contains("/usr/bin")
+            else { return }
+            self.set(found)
+        }
+        loading = task
+        return task
+    }
+
+    private func set(_ found: String) {
+        lock.lock()
+        path = found
+        lock.unlock()
     }
 }
