@@ -58,6 +58,7 @@ final class ClaudeSwapController: ObservableObject {
         didSet {
             guard autoSwitch != oldValue else { return }
             UserDefaults.standard.set(autoSwitch, forKey: Self.autoKey)
+            backoff.reset()
             autoSwitch ? startAuto() : stopAuto()
         }
     }
@@ -66,22 +67,34 @@ final class ClaudeSwapController: ObservableObject {
     var onNotableEvent: ((ClaudeSwapEvent) -> Void)?
 
     private static let autoKey = "claudeSwapAuto"
+    private static let autoTitle = "$ cswap auto --json"
     private var autoProcess: Process?
+    private var autoStartedAt: Date?
     private var autoBuffer = Data()
-    private var autoFailures = 0
+    private var backoff = AutoRestartBackoff()
     private var restartWork: DispatchWorkItem?
     private var refreshTimer: Timer?
     private var stopping = false
-    /// Asked for more often while an accounts page is open.
+    /// The wait for a new account's sign-in, while it can still be cancelled.
+    private var signIn: Task<Void, Never>?
+    /// Asked for more often while Settings › Accounts is open.
     var isVisible = false {
-        didSet { if isVisible && !oldValue { Task { await refresh() } } }
+        didSet { if isVisible && !oldValue && !showingInIsland { Task { await refresh() } } }
     }
+    /// The same, for the island's Accounts tab. Kept apart from `isVisible` so the island
+    /// closing doesn't slow refreshes while Settings still shows the accounts.
+    var showingInIsland = false {
+        didSet { if showingInIsland && !oldValue && !isVisible { Task { await refresh() } } }
+    }
+    private var isWatched: Bool { isVisible || showingInIsland }
 
     init() {
         autoSwitch = UserDefaults.standard.bool(forKey: Self.autoKey)
     }
 
     func start() {
+        // Before anything else can start a loop and write its own record.
+        endOrphanedLoop()
         locate()
         Task {
             await ClaudeCLI.loadShellPath()
@@ -98,7 +111,7 @@ final class ClaudeSwapController: ObservableObject {
                 // claude-swap asks Anthropic for every account's usage: once a minute while
                 // someone looks, every five minutes otherwise.
                 self.minutes += 1
-                if self.isVisible || self.minutes % 5 == 0 { Task { await self.refresh() } }
+                if self.isWatched || self.minutes % 5 == 0 { Task { await self.refresh() } }
             }
         }
     }
@@ -176,8 +189,9 @@ final class ClaudeSwapController: ObservableObject {
         guard busy == nil, executable != nil else { return }
         busy = "Updating claude-swap…"
         defer { busy = nil }
-        let wasRunning = autoProcess != nil
-        if wasRunning { stopAuto() }
+        // A loop waiting to restart counts too: it mustn't start mid-update.
+        let wasRunning = autoProcess != nil || restartWork != nil
+        stopAuto()
         let before = version
         let result = await cswap(["upgrade"], timeout: 900)
         newerVersion = nil
@@ -212,7 +226,8 @@ final class ClaudeSwapController: ObservableObject {
         let result = await cswap(["list", "--json"], quiet: true)
         if let found = ClaudeSwapCommand.newerVersion(in: result.text) { newerVersion = found }
         guard let list = ClaudeSwapJSON.accounts(from: result.output) else {
-            if result.status != 0 { log.error("cswap list failed: \(result.text, privacy: .public)") }
+            // Its output names accounts by email: only the exit code goes to the log.
+            if result.status != 0 { log.error("cswap list failed (exit \(result.status, privacy: .public))") }
             return
         }
         accounts = list
@@ -235,7 +250,8 @@ final class ClaudeSwapController: ObservableObject {
         restartAutoIfRunning()
     }
 
-    func switchTo(_ number: Int) async { await act(["switch", String(number), "--json"]) }
+    /// Whether claude-swap switched: false when it failed, or when another command was running.
+    func switchTo(_ number: Int) async -> Bool { await act(["switch", String(number), "--json"]) }
     func switchToBest() async { await act(["switch", "--strategy", "best", "--json"]) }
     func setEnabled(_ number: Int, _ enabled: Bool) async { await act([enabled ? "enable" : "disable", String(number)]) }
     func remove(_ number: Int) async { await act(["remove", String(number)]) }
@@ -252,12 +268,14 @@ final class ClaudeSwapController: ObservableObject {
         await act(value.isEmpty ? ["alias", String(number), "--unset"] : ["alias", String(number), value])
     }
 
-    private func act(_ arguments: [String]) async {
-        guard busy == nil else { return }
+    @discardableResult
+    private func act(_ arguments: [String]) async -> Bool {
+        guard busy == nil else { return false }
         busy = "cswap \(arguments.first ?? "")…"
-        _ = await cswap(arguments)
+        let result = await cswap(arguments)
         busy = nil
         await refresh()
+        return result.status == 0
     }
 
     /// A command typed in the console, run without a shell.
@@ -267,6 +285,12 @@ final class ClaudeSwapController: ObservableObject {
             return
         }
         guard !arguments.isEmpty else { return }
+        // Never repeat what was typed: it holds a token.
+        if ClaudeSwapCommand.carriesSecret(arguments) {
+            consoleInput = ""
+            note("A login token can't go through the console: it would show here and to other apps. Run cswap add-token in Terminal, where it asks for the token without showing it.", error: true)
+            return
+        }
         if ClaudeSwapCommand.needsTerminal(arguments) {
             note("“cswap \(arguments.joined(separator: " "))” needs a terminal (or runs until stopped). Automatic switching runs from the switch above; the dashboard opens with “Open in Terminal”.", error: true)
             return
@@ -309,45 +333,88 @@ final class ClaudeSwapController: ObservableObject {
             return
         }
         newAccountName = ""
+        waitingForSignIn = true
         adding = "Sign in to “\(name)” in the browser that Terminal opens…"
         note("Signing in a new account in \((directory.path as NSString).abbreviatingWithTildeInPath)")
+        // The name is the person's own text: quoted, so the shell never reads it as code.
         openInTerminal("""
         unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
         export CLAUDE_CONFIG_DIR=\(Self.quoted(directory.path))
-        echo "Sign in to the Claude account “\(name)” for LiveIsland and claude-swap."
+        printf '%s\\n' \(Self.quoted("Sign in to the Claude account “\(name)” for LiveIsland and claude-swap."))
         claude auth login
         echo
         echo "Done: LiveIsland adds it to claude-swap now. You can close this window."
         """, name: "add \(slug)")
-        Task { await waitForSignIn(in: directory.path, name: name) }
+        signIn = Task { await waitForSignIn(in: directory.path, name: name) }
+    }
+
+    /// Whether the sign-in can still be called off: not once claude-swap is adding it.
+    @Published private(set) var waitingForSignIn = false
+
+    /// Stops waiting for a sign-in the person gave up on.
+    func cancelAdding() {
+        guard waitingForSignIn else { return }
+        signIn?.cancel()
     }
 
     private func waitForSignIn(in directory: String, name: String) async {
-        defer { adding = nil }
+        defer {
+            waitingForSignIn = false
+            adding = nil
+            signIn = nil
+        }
         for _ in 0..<100 {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if Task.isCancelled {
+                Self.removeIfEmpty(directory)
+                note("Stopped waiting for “\(name)” to sign in. Close its Terminal window if it's still open.")
+                return
+            }
             guard let claude = ClaudeCLI.executable else { continue }
             let status = await run(claude, ["auth", "status", "--json"], title: nil, environment: ["CLAUDE_CONFIG_DIR": directory], quiet: true)
-            guard let object = try? JSONSerialization.jsonObject(with: status.output) as? [String: Any],
+            guard !Task.isCancelled,
+                  let object = try? JSONSerialization.jsonObject(with: status.output) as? [String: Any],
                   object["loggedIn"] as? Bool == true
             else { continue }
+            waitingForSignIn = false
             adding = "Adding “\(name)” to claude-swap…"
-            _ = await cswap(["add"], environment: ["CLAUDE_CONFIG_DIR": directory])
+            let added = await cswap(["add"], environment: ["CLAUDE_CONFIG_DIR": directory])
             await refresh()
+            if added.status == 0 {
+                note("Added “\(name)” to claude-swap.")
+            } else {
+                note("claude-swap couldn't add “\(name)” (exit \(added.status)): see its output above.", error: true)
+            }
             return
         }
+        Self.removeIfEmpty(directory)
         note("“\(name)” wasn't signed in within five minutes. Try Add Account again.", error: true)
+    }
+
+    /// A sign-in that never happened leaves its folder empty: remove it, so the next try
+    /// gets the plain name. A folder with anything in it stays, in case it holds a login.
+    private static func removeIfEmpty(_ directory: String) {
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: directory),
+              contents.allSatisfy({ $0 == ".DS_Store" })
+        else { return }
+        try? FileManager.default.removeItem(atPath: directory)
     }
 
     // MARK: - Automatic switching
 
     private func startAuto() {
         guard autoProcess == nil, let executable else {
-            if executable == nil { note("Install claude-swap first.", error: true) }
+            if executable == nil {
+                note("Install claude-swap first.", error: true)
+                auto = .off
+            }
             return
         }
         restartWork?.cancel()
+        restartWork = nil
         stopping = false
+        // Half a line left by the last loop would spoil the new loop's first event.
+        autoBuffer.removeAll()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["auto", "--json"]
@@ -387,20 +454,104 @@ final class ClaudeSwapController: ObservableObject {
         do {
             try process.run()
             autoProcess = process
-            auto = .running(since: Date())
-            append(Entry(at: Date(), kind: .command, title: "$ cswap auto --json", output: "Automatic switching is on: claude-swap checks every account and switches before one runs out.", isRunning: true))
+            let now = Date()
+            autoStartedAt = now
+            auto = .running(since: now)
+            recordLoop(process)
+            append(Entry(at: now, kind: .command, title: Self.autoTitle, output: "Automatic switching is on: claude-swap checks every account and switches before one runs out.", isRunning: true))
         } catch {
+            output.fileHandleForReading.readabilityHandler = nil
+            errors.fileHandleForReading.readabilityHandler = nil
             note("Couldn't start automatic switching: \(error.localizedDescription)", error: true)
+            // Not starting is a failure like stopping: try again, waiting longer each time.
+            guard autoSwitch, !stopping else { auto = .off; return }
+            scheduleRestart(why: "cswap auto didn't start")
         }
     }
 
     private func stopAuto() {
         restartWork?.cancel()
         restartWork = nil
+        autoStartedAt = nil
         guard let process = autoProcess else { auto = .off; return }
         autoProcess = nil
         process.terminate()
+        forgetLoop()
         auto = .off
+        finishAutoEntry(exitCode: nil)
+    }
+
+    /// The loop's console entry stops spinning once the loop is gone.
+    private func finishAutoEntry(exitCode: Int32?) {
+        guard let index = entries.lastIndex(where: { $0.title == Self.autoTitle && $0.isRunning }) else { return }
+        entries[index].isRunning = false
+        entries[index].exitCode = exitCode
+    }
+
+    /// Starts the loop again after a wait that grows while it keeps failing.
+    private func scheduleRestart(why: String) {
+        let ran = autoStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        autoStartedAt = nil
+        let delay = backoff.delay(afterRunning: ran)
+        auto = .restarting(at: Date().addingTimeInterval(delay), why: why)
+        note("\(why): starting it again in \(Int(delay)) s", error: true)
+        restartWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.startAuto() } }
+        restartWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    // MARK: - A loop left by a crash
+
+    private static var loopRecordURL: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("LiveIsland/claude-swap-auto.json")
+    }
+
+    /// Writes down which process the loop is, so a launch after a crash can end it.
+    private func recordLoop(_ process: Process) {
+        guard let running = Self.running(process.processIdentifier) else { return }
+        let url = Self.loopRecordURL
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? AutoLoopRecord(pid: running.pid, startedAt: running.startedAt).encoded().write(to: url, options: .atomic)
+    }
+
+    private func forgetLoop() {
+        try? FileManager.default.removeItem(at: Self.loopRecordURL)
+    }
+
+    /// A loop that a crashed LiveIsland left would keep switching next to the new one: end
+    /// it. Only the loop LiveIsland wrote down matches, never one started in Terminal.
+    private func endOrphanedLoop() {
+        guard let data = try? Data(contentsOf: Self.loopRecordURL) else { return }
+        forgetLoop()
+        guard let record = AutoLoopRecord.decode(data), record.isOrphan(Self.running(record.pid)) else { return }
+        kill(record.pid, SIGTERM)
+        log.notice("Ended a cswap auto loop left from an earlier run")
+        note("Ended the automatic switching an earlier LiveIsland left running.")
+    }
+
+    /// A process's parent, start and arguments, from the system; nil when it's gone.
+    private static func running(_ pid: Int32) -> AutoLoopRecord.Running? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard pid > 0, proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        let started = TimeInterval(info.pbi_start_tvsec) + TimeInterval(info.pbi_start_tvusec) / 1_000_000
+        return AutoLoopRecord.Running(pid: pid, parent: Int32(info.pbi_ppid), startedAt: started, arguments: arguments(of: pid))
+    }
+
+    /// The arguments a process was started with (`KERN_PROCARGS2`: argc, the executable's
+    /// path, then each argument, all NUL-terminated).
+    private static func arguments(of pid: Int32) -> [String] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return [] }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
+        let count = buffer.withUnsafeBytes { Int($0.loadUnaligned(as: Int32.self)) }
+        let parts = buffer[MemoryLayout<Int32>.size..<size].split(separator: 0, omittingEmptySubsequences: true)
+        // The first part is the executable's path; the arguments follow it.
+        return parts.dropFirst().prefix(count).map { String(decoding: $0, as: UTF8.self) }
     }
 
     private func restartAutoIfRunning() {
@@ -415,7 +566,6 @@ final class ClaudeSwapController: ObservableObject {
             let line = autoBuffer[autoBuffer.startIndex..<newline]
             autoBuffer.removeSubrange(autoBuffer.startIndex...newline)
             guard let parsed = ClaudeSwapEvent.parse(Data(line)) else { continue }
-            autoFailures = 0
             let event = parsed.event
             lastEvent = (event.summary, parsed.at ?? Date())
             var isError = false
@@ -433,21 +583,11 @@ final class ClaudeSwapController: ObservableObject {
         // now counts, or the replacement would be forgotten and keep switching on its own.
         guard process === autoProcess else { return }
         autoProcess = nil
-        if let index = entries.lastIndex(where: { $0.title == "$ cswap auto --json" && $0.isRunning }) {
-            entries[index].isRunning = false
-            entries[index].exitCode = status
-        }
-        guard autoSwitch, !stopping else { auto = .off; return }
+        forgetLoop()
+        finishAutoEntry(exitCode: status)
+        guard autoSwitch, !stopping else { autoStartedAt = nil; auto = .off; return }
         // It shouldn't stop on its own: start it again, waiting longer each time.
-        autoFailures += 1
-        let delays: [TimeInterval] = [5, 15, 60, 300]
-        let delay = delays[min(autoFailures - 1, delays.count - 1)]
-        let why = "cswap auto stopped (code \(status))"
-        auto = .restarting(at: Date().addingTimeInterval(delay), why: why)
-        note("\(why): starting it again in \(Int(delay)) s", error: true)
-        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.startAuto() } }
-        restartWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        scheduleRestart(why: "cswap auto stopped (code \(status))")
     }
 
     // MARK: - Earlier versions' logins
@@ -512,25 +652,37 @@ final class ClaudeSwapController: ObservableObject {
             let text = String(decoding: chunk, as: UTF8.self)
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.extend(entryID, with: text) } }
         }
-        output.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty { handle.readabilityHandler = nil } else { stream(chunk, true) }
-        }
-        errors.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty { handle.readabilityHandler = nil } else { stream(chunk, false) }
-        }
         let status: Int32 = await withCheckedContinuation { continuation in
+            // Done once both pipes reached their end and the process exited: resuming at exit
+            // alone could cut a long `list --json` short, and it would then not parse.
+            let done = Completion(continuation)
+            output.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty { handle.readabilityHandler = nil; done.reachedEnd() } else { stream(chunk, true) }
+            }
+            errors.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty { handle.readabilityHandler = nil; done.reachedEnd() } else { stream(chunk, false) }
+            }
             process.terminationHandler = { process in
-                // Let the last output arrive.
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { continuation.resume(returning: process.terminationStatus) }
+                done.exited(process.terminationStatus)
+                // A child it left running can hold the pipes open forever: don't wait on it.
+                DispatchQueue.global().asyncAfter(deadline: .now() + 5) { done.finish() }
             }
             do {
                 try process.run()
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    guard process.isRunning else { return }
+                    process.terminate()
+                    // One that ignores SIGTERM is killed after a moment.
+                    let pid = process.processIdentifier
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 5) { if process.isRunning { kill(pid, SIGKILL) } }
+                }
             } catch {
+                output.fileHandleForReading.readabilityHandler = nil
+                errors.fileHandleForReading.readabilityHandler = nil
                 collected.add(Data(error.localizedDescription.utf8), isOutput: false)
-                continuation.resume(returning: -1)
+                done.failed()
             }
         }
         let result = Result(status: status, output: collected.output, text: collected.text)
@@ -588,9 +740,23 @@ final class ClaudeSwapController: ObservableObject {
         do {
             try ("#!/bin/zsh -l\n" + body + "\n").write(to: script, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
-            NSWorkspace.shared.open(script)
         } catch {
             note("Couldn't open Terminal: \(error.localizedDescription)", error: true)
+            return
+        }
+        // The app that opens .command files (Terminal, unless the person chose another),
+        // opened without waiting: the plain open(_:) can block on a sandbox check.
+        let workspace = NSWorkspace.shared
+        guard let app = workspace.urlForApplication(toOpen: script)
+                ?? workspace.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
+        else {
+            note("Couldn't find Terminal to open \(script.lastPathComponent).", error: true)
+            return
+        }
+        workspace.open([script], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+            guard let error else { return }
+            let text = error.localizedDescription
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.note("Couldn't open Terminal: \(text)", error: true) } }
         }
     }
 
@@ -601,6 +767,40 @@ final class ClaudeSwapController: ObservableObject {
     /// How an argument reads in the console: quoted when it has spaces.
     private static func shown(_ argument: String) -> String {
         argument.contains(where: \.isWhitespace) || argument.isEmpty ? "\"\(argument)\"" : argument
+    }
+}
+
+/// When a command is done: both pipes at their end and the process gone, or a moment after
+/// it exited if a pipe never ends. Resumes the waiting command exactly once.
+private final class Completion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Int32, Never>?
+    private var pending = 3
+    private var status: Int32 = -1
+
+    init(_ continuation: CheckedContinuation<Int32, Never>) { self.continuation = continuation }
+
+    func reachedEnd() { step { _ in } }
+    func exited(_ status: Int32) { step { $0.status = status } }
+    func failed() { resume() }
+    func finish() { resume() }
+
+    private func step(_ change: (Completion) -> Void) {
+        lock.lock()
+        change(self)
+        pending -= 1
+        let ready = pending <= 0
+        lock.unlock()
+        if ready { resume() }
+    }
+
+    private func resume() {
+        lock.lock()
+        let waiting = continuation
+        continuation = nil
+        let status = status
+        lock.unlock()
+        waiting?.resume(returning: status)
     }
 }
 

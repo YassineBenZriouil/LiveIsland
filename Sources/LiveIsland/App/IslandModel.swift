@@ -70,7 +70,7 @@ final class IslandModel: ObservableObject {
     @Published var tab: IslandTab = .media {
         didSet {
             accountsMonitor.isVisible = isExpanded && tab == .accounts
-            claudeSwap.isVisible = isExpanded && tab == .accounts
+            claudeSwap.showingInIsland = isExpanded && tab == .accounts
             codexSwap.isVisible = isExpanded && tab == .accounts
         }
     }
@@ -401,25 +401,43 @@ final class IslandModel: ObservableObject {
     var bestCodexAccount: ClaudeAccount? { ClaudeAccount.best(codexAccounts, at: clock) }
 
     /// Claude accounts switch through claude-swap, Codex ones through ccswap.
+    /// Only says "Now on" when the switch happened; one switch at a time.
     func switchAccount(_ account: ClaudeAccount) {
+        guard accountsState.switching == nil else { return }
         guard account.kind == .claude else { return switchCodex(account) }
         guard let number = account.claudeSwapNumber else { return }
+        guard claudeSwap.busy == nil else {
+            return accountsMonitor.announce("claude-swap is busy: try again in a moment", isError: true)
+        }
+        accountsMonitor.setSwitching(account.id)
         Task {
-            await claudeSwap.switchTo(number)
-            let failed = claudeSwap.entries.last?.isError == true
-            accountsMonitor.announce(failed ? (claudeSwap.entries.last?.output.split(whereSeparator: \.isNewline).last.map(String.init) ?? "claude-swap couldn't switch")
-                                            : "Now on \(account.identity.displayName)", isError: failed)
+            let switched = await claudeSwap.switchTo(number)
+            accountsMonitor.setSwitching(nil)
+            accountsMonitor.announce(switched ? "Now on \(account.identity.displayName)"
+                                              : (Self.lastLine(of: claudeSwap.entries, from: "$ cswap switch") ?? "claude-swap couldn't switch"),
+                                     isError: !switched)
         }
     }
 
     private func switchCodex(_ account: ClaudeAccount) {
         guard let number = account.ccswapNumber else { return }
+        guard codexSwap.busy == nil else {
+            return accountsMonitor.announce("ccswap is busy: try again in a moment", isError: true)
+        }
+        accountsMonitor.setSwitching(account.id)
         Task {
             let switched = await codexSwap.switchTo(number)
+            accountsMonitor.setSwitching(nil)
             accountsMonitor.announce(switched ? "Codex now on \(account.identity.email): restart Codex to use it"
-                                              : (codexSwap.entries.last?.output.split(whereSeparator: \.isNewline).last.map(String.init) ?? "ccswap couldn't switch"),
+                                              : (Self.lastLine(of: codexSwap.entries, from: "$ ccswap codex switch") ?? "ccswap couldn't switch"),
                                      isError: !switched)
         }
+    }
+
+    /// The last thing a failed switch printed, to say why.
+    private static func lastLine(of entries: [ClaudeSwapController.Entry], from title: String) -> String? {
+        entries.last { $0.title.hasPrefix(title) }?.output
+            .split(whereSeparator: \.isNewline).last.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     /// ccswap's automatic switching for Codex, in the notch, the same way.
@@ -579,7 +597,7 @@ final class IslandModel: ObservableObject {
         tab = requested ?? suggestedTab
         isExpanded = true
         accountsMonitor.isVisible = tab == .accounts
-        claudeSwap.isVisible = tab == .accounts
+        claudeSwap.showingInIsland = tab == .accounts
         codexSwap.isVisible = tab == .accounts
         if timerFinished { dismissTimerAlert() }
         // Spotify and Music don't say when someone seeks inside them; check while open.
@@ -597,7 +615,7 @@ final class IslandModel: ObservableObject {
     func collapse() {
         isExpanded = false
         accountsMonitor.isVisible = false
-        claudeSwap.isVisible = false
+        claudeSwap.showingInIsland = false
         codexSwap.isVisible = false
         hoveredSession = nil
         scrubbing = nil

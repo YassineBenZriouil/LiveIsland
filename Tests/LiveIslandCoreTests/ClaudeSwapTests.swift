@@ -103,6 +103,16 @@ struct ClaudeSwapTests {
         #expect(ClaudeSwapCommand.needsTerminal(["menubar"]))
         #expect(!ClaudeSwapCommand.needsTerminal(["menubar", "--install-service"]))
         #expect(ClaudeSwapCommand.needsTerminal(["add-token"]) && ClaudeSwapCommand.needsTerminal(["add-token", "-"]))
+        #expect(ClaudeSwapCommand.needsTerminal(["add-token", "sk-ant-oat01-made-up"]), "a token never goes through the console")
+        #expect(!ClaudeSwapCommand.needsTerminal(["alias", "2", "Work"]))
         #expect(!ClaudeSwapCommand.needsTerminal(["list", "--json"]))
+    }
+
+    @Test func spotsATokenInATypedCommand() {
+        #expect(ClaudeSwapCommand.carriesSecret(["add-token", "sk-ant-oat01-made-up"]))
+        #expect(ClaudeSwapCommand.carriesSecret(["--verbose", "add-token", "made-up"]))
+        #expect(ClaudeSwapCommand.carriesSecret(["alias", "2", "sk-ant-oat01-made-up"]), "pasted in the wrong place")
+        #expect(!ClaudeSwapCommand.carriesSecret(["list", "--json"]))
+        #expect(!ClaudeSwapCommand.carriesSecret(["alias", "2", "sk-team"]))
     }
 }
