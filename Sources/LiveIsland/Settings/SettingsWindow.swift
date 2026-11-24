@@ -231,6 +231,15 @@ private struct GeneralPage: View {
                 ToggleRow(symbol: "power", tint: .green, title: "Open at login",
                           isOn: Binding(get: { model.launchAtLogin }, set: model.setLaunchAtLogin))
             }
+            Section("Full screen and sharing") {
+                ToggleRow(symbol: "arrow.up.left.and.arrow.down.right", tint: .gray, title: "Hide over full-screen apps",
+                          detail: "Calls and timers still show", isOn: $model.hideOverFullScreen)
+                ToggleRow(symbol: "rectangle.on.rectangle", tint: .indigo, title: "Hide details while sharing the screen",
+                          detail: "Blurs titles, projects and emails while macOS's screen recording, Zoom sharing, OBS or Loom runs",
+                          isOn: $model.hideDetailsWhileSharing)
+                ToggleRow(symbol: "eye.slash.fill", tint: .gray, title: "Always hide details",
+                          detail: "For sharing LiveIsland can't see, like a browser tab or a remote session", isOn: $model.alwaysHideDetails)
+            }
             Section {
                 ForEach([("liveisland://open", "Open the island"), ("liveisland://close", "Close it"),
                          ("liveisland://timer/5", "Start a 5-minute timer"),
@@ -330,7 +339,7 @@ private struct DisplaySection: View {
                     IconBadge(symbol: "arrow.up.and.down.and.arrow.left.and.right", tint: .teal, size: 26)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(model.islandPlacement == nil ? "On the top edge" : "Where you put it")
-                        Text("Click the pin in the open island (or Move…): it follows the pointer, on any display. Press ⌘ to place it; near the top middle, it goes back to the top.")
+                        Text("Click the pin in the open island (or Move…): it follows the pointer, on any display. Click it or press ⌘ to place it, Escape to cancel; near the top middle, it goes back to the top.")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }

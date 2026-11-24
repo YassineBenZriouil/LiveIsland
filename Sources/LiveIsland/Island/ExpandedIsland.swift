@@ -305,7 +305,7 @@ private struct MediaPage: View {
             let accent = model.accent
             VStack(spacing: 12) {
                 HStack(alignment: .top, spacing: 16) {
-                    CoverArt(track: track, accent: accent)
+                    CoverArt(track: track, accent: accent).privacySensitive()
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(alignment: .top, spacing: 10) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -313,6 +313,7 @@ private struct MediaPage: View {
                                 Text(subtitle(track)).font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(.white.opacity(0.6)).lineLimit(1)
                             }
+                            .privacySensitive()
                             Spacer(minLength: 0)
                             Waveform(meter: model.levels, style: .large, color: accent, playing: track.isPlaying)
                                 .opacity(track.isPlaying ? 1 : 0.45)
@@ -568,8 +569,8 @@ private struct TrackChip: View {
                 if let badge { Image(nsImage: badge).resizable().frame(width: 12, height: 12).offset(x: 3, y: 3) }
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: 11, weight: .semibold)).lineLimit(1)
-                Text(artist).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                Text(title).font(.system(size: 11, weight: .semibold)).lineLimit(1).privacySensitive()
+                Text(artist).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).lineLimit(1).privacySensitive()
             }
             .frame(maxWidth: 110, alignment: .leading)
         }
@@ -792,8 +793,8 @@ private struct AgentRow: View {
         HStack(spacing: 10) {
             AgentAvatar(kind: session.kind, state: session.state)
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.project).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Text(session.title ?? session.kind.displayName)
+                Text(session.project).font(.system(size: 13, weight: .semibold)).lineLimit(1).privacySensitive()
+                Text(session.title ?? session.kind.displayName).privacySensitive()
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
             }
             Spacer(minLength: 6)
@@ -894,7 +895,7 @@ private struct ProviderTitle: View {
                 .frame(width: 14, height: 14)
             Text(kind.displayName).font(.system(size: 11, weight: .bold))
             Spacer(minLength: 0)
-            if let detail { Text(detail).font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.45)).lineLimit(1) }
+            if let detail { Text(detail).font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.45)).lineLimit(1).privacySensitive() }
         }
     }
 }
@@ -1193,7 +1194,7 @@ private struct CalendarTile: View {
                         HStack(spacing: 6) {
                             RoundedRectangle(cornerRadius: 1.5).fill(event.color.map(Color.init(cgColor:)) ?? .red).frame(width: 3)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(event.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                                Text(event.title).font(.system(size: 12, weight: .semibold)).lineLimit(1).privacySensitive()
                                 TimelineView(.everyMinute) { context in
                                     Text(event.start > context.date
                                          ? "\(event.start.formatted(date: .omitted, time: .shortened)) · \(Format.until(event.start, from: context.date))"

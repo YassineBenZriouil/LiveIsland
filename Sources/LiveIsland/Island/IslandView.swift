@@ -20,7 +20,7 @@ struct IslandView: View {
                 shape.fill(Color.black)
                 Group {
                     if moving {
-                        Text("Press ⌘ to place it")
+                        Text("Click or press ⌘ to place it")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .foregroundStyle(.white.opacity(0.85))
                             .frame(maxHeight: .infinity)
@@ -54,6 +54,8 @@ struct IslandView: View {
         .animation(islandSpring, value: model.isExpanded)
         .animation(islandSpring, value: primary.map(CompactIsland.identity(of:)))
         .environment(\.colorScheme, .dark)
+        // While the screen is shared (or always, if asked), views marked `privacySensitive` blur.
+        .redacted(reason: model.hidesDetails ? .privacy : [])
     }
 }
 
@@ -205,6 +207,7 @@ struct CompactIsland: View {
             Image(systemName: "mic.fill").foregroundStyle(.orange)
         case .nowPlaying:
             Artwork(image: model.artwork(for: model.compactPlayer)?.image, size: layout.notch.height - 10, corner: 7)
+                .privacySensitive()
         }
     }
 

@@ -133,6 +133,21 @@ final class IslandModel: ObservableObject {
     }
     /// The displays connected now, for the picker; the island's controller keeps it current.
     @Published private(set) var displays: [IslandDisplay] = []
+    /// Over a full-screen app, show the island only for a call or a timer.
+    @Published var hideOverFullScreen: Bool { didSet { save(hideOverFullScreen, Key.fullScreen) } }
+    /// Blur titles, project names and emails while the screen looks shared or recorded.
+    @Published var hideDetailsWhileSharing: Bool { didSet { save(hideDetailsWhileSharing, Key.sharing) } }
+    /// Blur them all the time, for sharing LiveIsland can't see (a browser tab, a remote session).
+    @Published var alwaysHideDetails: Bool { didSet { save(alwaysHideDetails, Key.hideDetails) } }
+    /// A screen recorder or a screen share is running, as far as LiveIsland can tell.
+    @Published private(set) var screenShared = false
+
+    /// Whether the island blurs what's private right now (views marked `privacySensitive`).
+    var hidesDetails: Bool { alwaysHideDetails || (hideDetailsWhileSharing && screenShared) }
+
+    func setScreenShared(_ shared: Bool) {
+        if shared != screenShared { screenShared = shared }
+    }
 
     let media = NowPlayingProvider()
     let volume = OutputVolume()
@@ -157,7 +172,8 @@ final class IslandModel: ObservableObject {
         defaults.register(defaults: [Key.media: true, Key.agents: true, Key.calls: true, Key.devices: true,
                                      Key.calendar: true, Key.claude: true, Key.codex: true, Key.hover: true,
                                      Key.hoverDelay: 0.12, Key.glow: true, Key.sounds: false, Key.players: true,
-                                     Key.waveform: true, Key.updates: true])
+                                     Key.waveform: true, Key.updates: true, Key.fullScreen: false, Key.sharing: true,
+                                     Key.hideDetails: false])
         showMedia = defaults.bool(forKey: Key.media)
         showAgents = defaults.bool(forKey: Key.agents)
         showCalls = defaults.bool(forKey: Key.calls)
@@ -175,6 +191,9 @@ final class IslandModel: ObservableObject {
         controlPlayers = defaults.bool(forKey: Key.players)
         islandDisplay = DisplayChoice(saved: defaults.string(forKey: Key.display))
         islandPlacement = IslandPlacement(saved: defaults.string(forKey: Key.placement))
+        hideOverFullScreen = defaults.bool(forKey: Key.fullScreen)
+        hideDetailsWhileSharing = defaults.bool(forKey: Key.sharing)
+        alwaysHideDetails = defaults.bool(forKey: Key.hideDetails)
     }
 
     /// Following the pointer after a click on the pin, until ⌘ sets it down.
@@ -556,7 +575,9 @@ final class IslandModel: ObservableObject {
 
     // MARK: - Hover and expansion
 
-    func setHovering(_ hovering: Bool) {
+    /// `dwell` is the least time the pointer has to stay before the island opens: longer at the
+    /// top edge of a display without a notch, where the pointer often goes for the menu bar.
+    func setHovering(_ hovering: Bool, dwell: TimeInterval = 0) {
         guard hovering != isHovering else { return }
         isHovering = hovering
         hoverWork?.cancel()
@@ -566,7 +587,7 @@ final class IslandModel: ObservableObject {
         }
         hoverWork = work
         // Open quickly, close a little later, so passing the mouse by doesn't flicker it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (hovering ? hoverDelay : 0.35), execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (hovering ? max(hoverDelay, dwell) : 0.35), execute: work)
     }
 
     func toggleExpanded() {
@@ -728,5 +749,8 @@ final class IslandModel: ObservableObject {
         static let updates = "checkForUpdates"
         static let display = "islandDisplay"
         static let placement = "islandPlacement"
+        static let fullScreen = "hideOverFullScreen"
+        static let sharing = "hideDetailsWhileSharing"
+        static let hideDetails = "alwaysHideDetails"
     }
 }
