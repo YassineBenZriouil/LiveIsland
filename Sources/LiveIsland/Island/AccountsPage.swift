@@ -128,7 +128,7 @@ private struct ClaudeSwapHeader: View {
                 .buttonStyle(PressableStyle())
                 .help("claude-swap's console: every command and its output")
                 if let last = swap.lastEvent, swap.autoSwitch {
-                    Text(last.summary).font(.system(size: 9.5)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+                    Text(last.summary).font(.system(size: 9.5)).foregroundStyle(.white.opacity(0.45)).lineLimit(1).privacySensitive()
                 }
             }
             Spacer(minLength: 0)
@@ -177,7 +177,7 @@ private struct CodexSwapHeader: View {
                 .buttonStyle(PressableStyle())
                 .help("ccswap's console: every command and its output")
                 if let last = swap.lastEvent, swap.autoSwitch {
-                    Text(last.summary).font(.system(size: 9.5)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+                    Text(last.summary).font(.system(size: 9.5)).foregroundStyle(.white.opacity(0.45)).lineLimit(1).privacySensitive()
                 }
             }
             Spacer(minLength: 0)
@@ -200,13 +200,13 @@ private struct AccountRow: View {
             AccountAvatar(identity: account.identity, size: 30)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Text(account.identity.displayName).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(account.identity.displayName).font(.system(size: 13, weight: .semibold)).lineLimit(1).privacySensitive()
                     if let plan = account.identity.plan {
                         Text(plan).font(.system(size: 9, weight: .bold)).foregroundStyle(.white.opacity(0.6))
                             .padding(.horizontal, 5).frame(height: 15).background(Capsule().fill(.white.opacity(0.1)))
                     }
                 }
-                Text(account.identity.email).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                Text(account.identity.email).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)).lineLimit(1).privacySensitive()
             }
             .frame(width: 168, alignment: .leading)
             let windows = account.windows
