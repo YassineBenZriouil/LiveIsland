@@ -660,7 +660,7 @@ private struct EmptyMedia: View {
                     .font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     ForEach(["com.apple.Music", "com.spotify.client"], id: \.self) { bundle in
-                        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) {
+                        if let url = AppInfo.url(bundle) {
                             Button {
                                 NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
                             } label: {
@@ -1325,16 +1325,34 @@ private struct CameraTile: View {
 
 // MARK: - Shared
 
-/// App icons and names, looked up once.
+/// Where apps live, their icons and names, looked up once. Views ask on every redraw, and each
+/// Launch Services lookup is a trip to another process, so missing apps are remembered too.
 @MainActor
 enum AppInfo {
     private static var icons: [String: NSImage] = [:]
     private static var names: [String: String] = [:]
+    /// Misses expire after 10 minutes, or as soon as any app launches (one just installed, say);
+    /// hits after an hour, in case an app was moved or deleted.
+    private static var urls = LookupCache<String, URL>(hitLifetime: 3600, missLifetime: 600)
+    private static var launchObserver: NSObjectProtocol?
+
+    /// Where the app is installed, or nil when it isn't.
+    static func url(_ bundleIdentifier: String) -> URL? {
+        if launchObserver == nil {
+            launchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { urls.forgetMisses() }
+            }
+        }
+        return urls.value(for: bundleIdentifier, at: Date()) {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0)
+        }
+    }
 
     static func icon(_ bundleIdentifier: String?) -> NSImage? {
         guard let bundleIdentifier else { return nil }
         if let icon = icons[bundleIdentifier] { return icon }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
+        guard let url = url(bundleIdentifier) else { return nil }
         let icon = NSWorkspace.shared.icon(forFile: url.path)
         icons[bundleIdentifier] = icon
         return icon
@@ -1343,7 +1361,7 @@ enum AppInfo {
     static func name(_ bundleIdentifier: String?) -> String? {
         guard let bundleIdentifier else { return nil }
         if let name = names[bundleIdentifier] { return name }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
+        guard let url = url(bundleIdentifier) else { return nil }
         let name = FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
         names[bundleIdentifier] = name
         return name
