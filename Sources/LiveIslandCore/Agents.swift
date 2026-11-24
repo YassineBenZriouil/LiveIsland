@@ -59,9 +59,12 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var cwd: String?
     /// The editor or terminal it runs in, when its process is still alive.
     public var host: SessionHost?
+    /// What it's waiting on the person for, when it needs them.
+    public var request: AgentRequest?
 
     public init(id: String, kind: AgentKind, project: String, title: String? = nil, state: AgentState,
-                lastActivity: Date, workingSince: Date? = nil, tokens: Int = 0, cwd: String? = nil, host: SessionHost? = nil) {
+                lastActivity: Date, workingSince: Date? = nil, tokens: Int = 0, cwd: String? = nil, host: SessionHost? = nil,
+                request: AgentRequest? = nil) {
         self.id = id
         self.kind = kind
         self.project = project
@@ -72,6 +75,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.tokens = tokens
         self.cwd = cwd
         self.host = host
+        self.request = request
     }
 
     /// The session's id, from its file name: `<id>.jsonl` for Claude Code,
@@ -80,7 +84,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         let name = URL(fileURLWithPath: id).deletingPathExtension().lastPathComponent
         switch kind {
         case .claude:
-            return name.isEmpty ? nil : name
+            // It goes into a shell command, so only a real UUID may.
+            return UUID(uuidString: name) == nil ? nil : name
         case .codex:
             // A UUID is 36 characters: the end of the name.
             guard name.count > 36 else { return nil }
@@ -96,6 +101,51 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         guard let cwd else { return resume }
         // Claude Code finds sessions by project folder, so start there.
         return "cd '\(cwd.replacingOccurrences(of: "'", with: "'\\''"))' && \(resume)"
+    }
+}
+
+/// What an agent is waiting on the person for, read from the end of its transcript, so the
+/// island can say more than "Needs you".
+public struct AgentRequest: Equatable, Sendable {
+    public enum Kind: String, Equatable, Sendable {
+        /// A tool waits for the person to allow it.
+        case permission
+        /// The agent asked something and waits for the answer.
+        case question
+    }
+
+    public var kind: Kind
+    /// The tool's name ("Bash", "Edit"), when a tool is waiting.
+    public var tool: String?
+    /// One short line: the command, the file, or the question.
+    public var summary: String?
+
+    public init(kind: Kind, tool: String? = nil, summary: String? = nil) {
+        self.kind = kind
+        self.tool = tool
+        self.summary = summary.flatMap(Self.shortened)
+    }
+
+    /// "Bash: npm test", or the question on its own.
+    public var text: String {
+        switch (tool, summary) {
+        case let (tool?, summary?) where kind == .permission: return "\(tool): \(summary)"
+        case let (_, summary?): return summary
+        case let (tool?, nil): return tool
+        case (nil, nil): return kind == .question ? "Has a question" : "Needs permission"
+        }
+    }
+
+    /// The longest summary kept: about a line of the open island.
+    public static let maxLength = 120
+
+    /// The text on one line, trimmed and cut at `maxLength` with an ellipsis; nil when empty.
+    public static func shortened(_ text: String) -> String? {
+        let line = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        guard !line.isEmpty else { return nil }
+        guard line.count > maxLength else { return line }
+        return String(line.prefix(maxLength - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
 }
 
