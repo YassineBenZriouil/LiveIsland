@@ -30,8 +30,14 @@ final class SingWithMe: ObservableObject {
             if isEnabled { load() } else { reset() }
         }
     }
-    @Published var fontScale: Double { didSet { defaults.set(fontScale, forKey: Key.fontScale) } }
-    @Published var alignment: LyricsAlignment { didSet { defaults.set(alignment.rawValue, forKey: Key.alignment) } }
+    /// How the card looks: blur, colours, words, shape, motion and where it sits.
+    @Published var appearance: LyricsAppearance {
+        didSet {
+            guard appearance != oldValue else { return }
+            defaults.set(appearance.encoded(), forKey: Key.appearance)
+            if appearance.highlight != oldValue.highlight { replan() }
+        }
+    }
     /// Seconds added to the player's position: positive shows the words sooner.
     @Published var offset: Double {
         didSet {
@@ -50,6 +56,12 @@ final class SingWithMe: ObservableObject {
     @Published private(set) var state: State = .idle
     /// The line being sung, while lyrics are on screen.
     @Published private(set) var currentIndex: Int?
+    /// How far that line has filled in, for the Spotify-style highlight. Changes only when the
+    /// line does, on a pause or a seek, or when the song drifts from it; Core Animation moves
+    /// the fill in between.
+    @Published private(set) var fill: LyricsFill?
+    /// When `fill` was planned, to tell whether a new plan agrees with the running one.
+    private var fillPlanned = Date()
 
     /// Set by the island: the Media tab, with its card, is on screen.
     var cardVisible = false {
@@ -82,10 +94,15 @@ final class SingWithMe: ObservableObject {
     private static let closeAfterGone: TimeInterval = 3
 
     init() {
-        defaults.register(defaults: [Key.enabled: false, Key.fontScale: 1.0, Key.offset: 0.0, Key.percent: false])
+        defaults.register(defaults: [Key.enabled: false, Key.offset: 0.0, Key.percent: false])
+        // The first sizes were huge and nobody picked them: everyone starts again from the
+        // small card, once. The old text size and alignment now live in the appearance.
+        if defaults.integer(forKey: Key.placementsVersion) < LyricsPlacement.savedVersion {
+            for key in [Key.placements, Key.oldFontScale, Key.oldAlignment] { defaults.removeObject(forKey: key) }
+            defaults.set(LyricsPlacement.savedVersion, forKey: Key.placementsVersion)
+        }
         isEnabled = defaults.bool(forKey: Key.enabled)
-        fontScale = defaults.double(forKey: Key.fontScale)
-        alignment = LyricsAlignment(rawValue: defaults.string(forKey: Key.alignment) ?? "") ?? .left
+        appearance = LyricsAppearance.decode(defaults.data(forKey: Key.appearance))
         offset = defaults.double(forKey: Key.offset)
         sizeInPercent = defaults.bool(forKey: Key.percent)
         placements = defaults.dictionary(forKey: Key.placements) as? [String: String] ?? [:]
@@ -122,6 +139,7 @@ final class SingWithMe: ObservableObject {
         playerRefresh?.tolerance = 1
         refreshPlayers?()
         watchForStop()
+        log.notice("Sing With Me opened: \(self.timingSummary, privacy: .public)")
     }
 
     func close() {
@@ -166,6 +184,7 @@ final class SingWithMe: ObservableObject {
             // A video or a stream without an artist can't be looked up.
             state = next != nil && key == nil ? .missing : .idle
             currentIndex = nil
+            fill = nil
         }
         load()
         replan()
@@ -204,7 +223,9 @@ final class SingWithMe: ObservableObject {
     private func finish(_ answer: LyricsProvider.Answer) {
         task = nil
         switch answer {
-        case .found(let lyrics): state = .found(lyrics)
+        case .found(let lyrics):
+            state = .found(lyrics)
+            log.notice("Lyrics: \(lyrics.kind.rawValue, privacy: .public), \(lyrics.lines.count) lines")
         case .missing: state = .missing
         case .failed:
             state = .failed
@@ -226,6 +247,7 @@ final class SingWithMe: ObservableObject {
         generation += 1
         state = track != nil && queryKey == nil ? .missing : .idle
         currentIndex = nil
+        fill = nil
         stopTimer()
     }
 
@@ -242,10 +264,15 @@ final class SingWithMe: ObservableObject {
         stopTimer()
         guard isWanted, let lyrics, lyrics.kind == .synced, let track, let position = track.position(at: Date()) else {
             if currentIndex != nil, lyrics?.kind != .synced { currentIndex = nil }
+            if fill != nil { fill = nil }
             return
         }
         let plan = LyricsTiming.plan(lyrics, position: position, rate: track.playbackRate, isPlaying: track.isPlaying, offset: offset)
         if plan.index != currentIndex { currentIndex = plan.index }
+        updateFill(lyrics, position: position, track: track)
+        if track.isPlaying, track.timestamp == nil {
+            log.error("The player gives no time with its position: the lyrics can't follow it")
+        }
         guard let delay = plan.delay else { return }
         let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.replan() }
@@ -253,6 +280,23 @@ final class SingWithMe: ObservableObject {
         timer.tolerance = min(0.03, delay * 0.1)
         RunLoop.main.add(timer, forMode: .common)
         lineTimer = timer
+    }
+
+    private func updateFill(_ lyrics: Lyrics, position: Double, track: NowPlaying) {
+        guard appearance.highlight == .fill else {
+            if fill != nil { fill = nil }
+            return
+        }
+        let next = LyricsTiming.fill(lyrics, position: position, rate: track.playbackRate, isPlaying: track.isPlaying,
+                                     offset: offset, duration: track.duration)
+        let now = Date()
+        if let fill, let next, let span = LyricsTiming.lineSpan(lyrics, index: next.index, duration: track.duration),
+           fill.agrees(with: next, after: now.timeIntervalSince(fillPlanned), lineLength: span.upperBound - span.lowerBound) {
+            return
+        }
+        guard next != fill else { return }
+        fill = next
+        fillPlanned = now
     }
 
     private func stopTimer() {
@@ -304,8 +348,18 @@ final class SingWithMe: ObservableObject {
     }
 
     func changeFontScale(by step: Double) {
-        let range = LyricsTypography.scaleRange
-        fontScale = min(max(((fontScale + step) * 10).rounded() / 10, range.lowerBound), range.upperBound)
+        appearance.changeTextScale(by: step)
+    }
+
+    func resetLook() {
+        appearance = .standard
+    }
+
+    /// For the log: whether the song gives what the lyrics need to follow it.
+    var timingSummary: String {
+        guard let track else { return "no track" }
+        let position = track.position(at: Date()).map { String(format: "%.1f", $0) } ?? "none"
+        return "position \(position), timestamp \(track.timestamp == nil ? "missing" : "set"), rate \(track.playbackRate), playing \(track.isPlaying), line \(currentIndex.map(String.init) ?? "none")"
     }
 
     func nudgeOffset(by steps: Int) {
@@ -314,8 +368,10 @@ final class SingWithMe: ObservableObject {
 
     private enum Key {
         static let enabled = "singWithMe"
-        static let fontScale = "lyricsFontScale"
-        static let alignment = "lyricsAlignment"
+        static let appearance = "lyricsAppearance"
+        static let oldFontScale = "lyricsFontScale"
+        static let oldAlignment = "lyricsAlignment"
+        static let placementsVersion = "lyricsPlacementsVersion"
         static let offset = "lyricsOffset"
         static let percent = "lyricsSizeInPercent"
         static let placements = "lyricsPlacements"

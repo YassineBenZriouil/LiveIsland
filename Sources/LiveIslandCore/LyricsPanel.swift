@@ -1,39 +1,39 @@
 import CoreGraphics
 import Foundation
 
-/// The sizes Sing With Me's window comes in. Each hangs from the top of the screen, like the
-/// island; "custom" is wherever the person dragged it.
+/// The sizes Sing With Me's card comes in. "Small" is the default: a little card just under
+/// the notch. "Custom" is whatever the person dragged or typed.
 public enum LyricsPreset: String, CaseIterable, Identifiable, Sendable {
+    case small
+    case medium
     case band
     case fullScreen
-    case wideIsland
-    case compact
     case custom
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
-        case .band: return "Full-width band"
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .band: return "Wide band"
         case .fullScreen: return "Full screen"
-        case .wideIsland: return "Wide island"
-        case .compact: return "Compact card"
         case .custom: return "Custom"
         }
     }
 
     public var symbol: String {
         switch self {
+        case .small: return "capsule"
+        case .medium: return "rectangle"
         case .band: return "rectangle.topthird.inset.filled"
         case .fullScreen: return "rectangle.inset.filled"
-        case .wideIsland: return "capsule"
-        case .compact: return "rectangle.center.inset.filled"
         case .custom: return "hand.draw"
         }
     }
 }
 
-/// Where Sing With Me's window goes on one display: a preset, or the frame the person dragged,
+/// Where Sing With Me's card goes on one display: a preset, or the frame the person dragged,
 /// kept relative to the display's bottom-left corner so it survives another arrangement.
 public struct LyricsPlacement: Equatable, Sendable {
     public var preset: LyricsPreset
@@ -41,13 +41,17 @@ public struct LyricsPlacement: Equatable, Sendable {
     public var frame: CGRect?
 
     public init(preset: LyricsPreset, frame: CGRect? = nil) {
-        self.preset = preset == .custom && frame == nil ? .band : preset
+        self.preset = preset == .custom && frame == nil ? .small : preset
         self.frame = self.preset == .custom ? frame : nil
     }
 
-    public static let standard = LyricsPlacement(preset: .band)
+    public static let standard = LyricsPlacement(preset: .small)
 
-    /// "band", "compact", or "custom:x,y,w,h"; anything else is the standard band.
+    /// What the saved placements are written in. Version 1 placements were the old, huge
+    /// presets nobody chose: they're dropped once, so everyone starts from the small card.
+    public static let savedVersion = 2
+
+    /// "small", "medium", or "custom:x,y,w,h"; anything else is the standard small card.
     public init(saved: String?) {
         guard let saved else { self = .standard; return }
         if saved.hasPrefix("custom:") {
@@ -55,7 +59,7 @@ public struct LyricsPlacement: Equatable, Sendable {
             guard numbers.count == 4, numbers.allSatisfy(\.isFinite), numbers[2] > 0, numbers[3] > 0 else { self = .standard; return }
             self.init(preset: .custom, frame: CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3]))
         } else {
-            self.init(preset: LyricsPreset(rawValue: saved) ?? .band)
+            self.init(preset: LyricsPreset(rawValue: saved) ?? .small)
         }
     }
 
@@ -65,36 +69,64 @@ public struct LyricsPlacement: Equatable, Sendable {
     }
 }
 
-/// The window's frame for a preset, and the limits a drag or a typed size stays within.
-public enum LyricsGeometry {
-    public static let minimumSize = CGSize(width: 360, height: 160)
-    public static let compactSize = CGSize(width: 520, height: 220)
-    public static let wideIslandHeight: CGFloat = 140
-    public static let bandFraction: CGFloat = 0.4
+/// Where the card sits: centred just under the notch (and the menu bar), or wherever it
+/// was dragged.
+public enum LyricsPosition: String, Codable, CaseIterable, Identifiable, Sendable {
+    case underNotch
+    case free
 
-    /// The room it may take: the whole width, from the Dock up to the very top (it hangs from
-    /// the notch, over the menu bar).
+    public var id: String { rawValue }
+    public var title: String { self == .underNotch ? "Under the notch" : "Where I drag it" }
+}
+
+/// The card's frame for a preset, and the limits a drag or a typed size stays within.
+public enum LyricsGeometry {
+    public static let minimumSize = CGSize(width: 100, height: 44)
+    /// The small card: a tenth of the screen's width, tall enough for two or three lines.
+    public static let smallWidthFraction: CGFloat = 0.10
+    public static let smallHeight: CGFloat = 68
+    public static let mediumWidthFraction: CGFloat = 0.25
+    public static let mediumHeight: CGFloat = 128
+    public static let bandHeight: CGFloat = 160
+    /// Room between the menu bar (or the notch) and the card.
+    public static let gap: CGFloat = 6
+
+    /// The room it may take: the whole screen above the Dock, menu bar included (it can be
+    /// dragged there, but no preset goes there).
     public static func bounds(screen: CGRect, visible: CGRect) -> CGRect {
         let bottom = max(screen.minY, min(visible.minY, screen.maxY - minimumSize.height))
         return CGRect(x: screen.minX, y: bottom, width: screen.width, height: screen.maxY - bottom)
     }
 
-    /// The frame in global coordinates. `notch` centres the compact card under the camera.
-    public static func frame(for placement: LyricsPlacement, screen: CGRect, visible: CGRect, notch: CGRect?) -> CGRect {
-        let bounds = bounds(screen: screen, visible: visible)
-        let centre = notch?.midX ?? screen.midX
-        func hanging(width: CGFloat, height: CGFloat, centredOn x: CGFloat) -> CGRect {
-            clamp(CGRect(x: x - width / 2, y: bounds.maxY - height, width: width, height: height), to: bounds)
+    /// The size of a preset on a screen.
+    public static func size(of preset: LyricsPreset, screen: CGRect, visible: CGRect) -> CGSize {
+        switch preset {
+        case .small, .custom: return CGSize(width: (screen.width * smallWidthFraction).rounded(), height: smallHeight)
+        case .medium: return CGSize(width: (screen.width * mediumWidthFraction).rounded(), height: mediumHeight)
+        case .band: return CGSize(width: visible.width - 2 * gap, height: bandHeight)
+        case .fullScreen: return CGSize(width: visible.width, height: visible.height)
         }
-        switch placement.preset {
-        case .band: return hanging(width: bounds.width, height: (screen.height * bandFraction).rounded(), centredOn: bounds.midX)
-        case .fullScreen: return bounds
-        case .wideIsland: return hanging(width: bounds.width, height: wideIslandHeight, centredOn: bounds.midX)
-        case .compact: return hanging(width: compactSize.width, height: compactSize.height, centredOn: centre)
-        case .custom:
-            guard let saved = placement.frame else { return frame(for: .standard, screen: screen, visible: visible, notch: notch) }
+    }
+
+    /// The frame in global coordinates. Under the notch, the card is centred on the camera
+    /// (or the screen) just below the menu bar, whatever its size; free, a dragged card keeps
+    /// its place.
+    public static func frame(for placement: LyricsPlacement, position: LyricsPosition,
+                             screen: CGRect, visible: CGRect, notch: CGRect?) -> CGRect {
+        let bounds = bounds(screen: screen, visible: visible)
+        let size = placement.frame?.size ?? self.size(of: placement.preset, screen: screen, visible: visible)
+        if position == .free, let saved = placement.frame {
             return clamp(saved.offsetBy(dx: screen.minX, dy: screen.minY), to: bounds)
         }
+        if placement.preset == .fullScreen { return clamp(visible, to: bounds) }
+        return clamp(underNotch(size, screen: screen, visible: visible, notch: notch), to: bounds)
+    }
+
+    /// `size` centred under the camera, just below the menu bar.
+    public static func underNotch(_ size: CGSize, screen: CGRect, visible: CGRect, notch: CGRect?) -> CGRect {
+        let centre = notch?.midX ?? screen.midX
+        let top = min(visible.maxY, notch?.minY ?? visible.maxY) - gap
+        return CGRect(x: centre - size.width / 2, y: top - size.height, width: size.width, height: size.height)
     }
 
     /// `rect` at least the minimum size and at most `bounds`, moved (not shrunk further) to
@@ -104,10 +136,11 @@ public enum LyricsGeometry {
         let height = min(max(rect.height, minimumSize.height), bounds.height)
         let x = min(max(rect.minX, bounds.minX), bounds.maxX - width)
         let y = min(max(rect.minY, bounds.minY), bounds.maxY - height)
-        return CGRect(x: x, y: y, width: width, height: height).integral
+        // Whole points, without growing (`integral` would add a point to a half-point origin).
+        return CGRect(x: x.rounded(), y: y.rounded(), width: width.rounded(), height: height.rounded())
     }
 
-    /// Which edges a drag moves: one or two of them, or none to move the whole window.
+    /// Which edges a drag moves.
     public struct Edges: OptionSet, Hashable, Sendable {
         public let rawValue: Int
         public init(rawValue: Int) { self.rawValue = rawValue }
@@ -117,19 +150,20 @@ public enum LyricsGeometry {
         public static let top = Edges(rawValue: 8)
     }
 
-    /// The edges under a point `inset` points or less from the window's sides, in the window's
-    /// own coordinates (origin bottom-left).
+    /// The edges under a point `inset` points or less from the card's sides, in its own
+    /// coordinates (origin bottom-left). Corners take a wider band, but never more than a
+    /// third of a small card.
     public static func edges(at point: CGPoint, in size: CGSize, inset: CGFloat = 6) -> Edges {
         var edges: Edges = []
         if point.x <= inset { edges.insert(.left) } else if point.x >= size.width - inset { edges.insert(.right) }
         if point.y <= inset { edges.insert(.bottom) } else if point.y >= size.height - inset { edges.insert(.top) }
-        // Corners are easier to grab: a wider band near them.
-        let corner = inset * 3
+        let cornerX = min(inset * 3, size.width / 3)
+        let cornerY = min(inset * 3, size.height / 3)
         if edges.contains(.left) || edges.contains(.right) {
-            if point.y <= corner { edges.insert(.bottom) } else if point.y >= size.height - corner { edges.insert(.top) }
+            if point.y <= cornerY { edges.insert(.bottom) } else if point.y >= size.height - cornerY { edges.insert(.top) }
         }
         if edges.contains(.bottom) || edges.contains(.top) {
-            if point.x <= corner { edges.insert(.left) } else if point.x >= size.width - corner { edges.insert(.right) }
+            if point.x <= cornerX { edges.insert(.left) } else if point.x >= size.width - cornerX { edges.insert(.right) }
         }
         return edges
     }
@@ -145,15 +179,28 @@ public enum LyricsGeometry {
         return clamp(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY), to: bounds)
     }
 
-    /// The window at a typed size: the same top edge and centre, inside `bounds`.
+    /// The card at a typed size: the same top edge and centre, inside `bounds`.
     public static func sized(_ rect: CGRect, width: CGFloat, height: CGFloat, within bounds: CGRect) -> CGRect {
         let next = CGRect(x: rect.midX - width / 2, y: rect.maxY - height, width: width, height: height)
         return clamp(next, to: bounds)
     }
 }
 
-/// Where the header's controls go, so none sits under the camera: beside the notch when the
-/// window's top runs behind it and there's room on both sides, else just below it.
+/// Where the hover buttons (× and the menu) go: the card's top-right corner, unless the
+/// camera would hide them there; then its bottom-right.
+public enum LyricsControls {
+    public static let size = CGSize(width: 54, height: 24)
+    public static let inset: CGFloat = 5
+
+    /// True for the top corner. `panel` and `notch` in global coordinates.
+    public static func atTop(panel: CGRect, notch: CGRect?) -> Bool {
+        guard let notch else { return true }
+        let corner = CGRect(x: panel.maxX - size.width - inset, y: panel.maxY - size.height - inset,
+                            width: size.width, height: size.height)
+        return !corner.intersects(notch)
+    }
+}
+
 public struct LyricsHeaderLayout: Equatable, Sendable {
     /// How far down the header starts.
     public var topInset: CGFloat
@@ -200,26 +247,83 @@ public struct LyricsHeaderLayout: Equatable, Sendable {
     }
 }
 
-/// How big the words are: with the window, times the person's own multiplier.
+/// How big the words are and how many lines show, from the card's size and the person's
+/// choices.
 public enum LyricsTypography {
     public static let headerHeight: CGFloat = 44
-    public static let scaleRange: ClosedRange<Double> = 0.6...2
+    public static let scaleRange: ClosedRange<Double> = 0.5...2.5
+    /// The smallest words worth showing; below it, fewer lines show instead.
+    public static let smallest: CGFloat = 10
+    /// Each line takes this many times its font size, with the space between lines.
+    public static let lineHeight: CGFloat = 1.4
 
-    public static func fontSize(panel: CGSize, scale: Double) -> CGFloat {
-        let room = max(0, panel.height - headerHeight)
-        let base = min(max(min(room * 0.11, panel.width * 0.045), 16), 64)
-        let scale = min(max(scale.isFinite ? scale : 1, scaleRange.lowerBound), scaleRange.upperBound)
-        return (base * CGFloat(scale)).rounded()
+    /// Only a card this big has room for the track's name and artwork above the words; a
+    /// smaller one shows its buttons on hover instead.
+    public static func showsHeader(panel: CGSize) -> Bool {
+        panel.width >= 320 && panel.height >= 180
     }
 
-    /// Where the current line sits, from the top of the lyrics (0) to the bottom (1): a third
-    /// of the way down, or near the top when only a few lines fit.
+    /// The vertical padding around the words.
+    public static func padding(panel: CGSize) -> CGFloat {
+        min(max(panel.height * 0.08, 5), 18)
+    }
+
+    public struct Layout: Equatable, Sendable {
+        public var fontSize: CGFloat
+        /// How many lines show around the current one; nil: every line, scrolling.
+        public var lines: Int?
+    }
+
+    /// The words' size and the number of lines for a card. With a line count, the words
+    /// grow to fill the card (up to its width allowing), and lines are dropped while the words
+    /// would be too small to read; with every line, they're sized to show about six.
+    public static func layout(panel: CGSize, lines requested: LyricsLineCount, scale: Double) -> Layout {
+        let header = showsHeader(panel: panel) ? headerHeight : 0
+        let room = max(0, panel.height - header - 2 * padding(panel: panel))
+        let scale = CGFloat(min(max(scale.isFinite ? scale : 1, scaleRange.lowerBound), scaleRange.upperBound))
+        let widest = max(smallest, panel.width * 0.085)
+        guard var count = requested.count else {
+            let size = min(max(min(room / (6 * lineHeight), widest), 14), 56)
+            return Layout(fontSize: (size * scale).rounded(), lines: nil)
+        }
+        func size(for count: Int) -> CGFloat { min(room / (CGFloat(count) * lineHeight), widest, 64) * scale }
+        while count > 1, size(for: count) < smallest { count -= 1 }
+        return Layout(fontSize: max(smallest * min(scale, 1), size(for: count)).rounded(), lines: count)
+    }
+
+    /// Where the current line sits in a scrolling list, from the top (0) to the bottom (1).
     public static func anchor(height: CGFloat) -> CGFloat {
         height < 240 ? 0.08 : 0.33
     }
 }
 
-/// The timing offset the person sets when the words drift from the song.
+/// How many lines show at once.
+public enum LyricsLineCount: String, Codable, CaseIterable, Identifiable, Sendable {
+    case one, two, three, five, all
+
+    public var id: String { rawValue }
+    public var count: Int? {
+        switch self {
+        case .one: return 1
+        case .two: return 2
+        case .three: return 3
+        case .five: return 5
+        case .all: return nil
+        }
+    }
+    public var title: String { count.map(String.init) ?? "All" }
+
+    /// The lines to show around `current` (nil before the first line): just it and what comes
+    /// next for one or two lines, centred on it for more, kept inside the song.
+    public static func window(count: Int, around current: Int?, total: Int) -> Range<Int> {
+        guard total > 0, count > 0 else { return 0..<0 }
+        let count = min(count, total)
+        let before = count >= 3 ? (count - 1) / 2 : 0
+        let start = min(max((current ?? 0) - before, 0), total - count)
+        return start..<(start + count)
+    }
+}
+
 public enum LyricsOffset {
     public static let step: Double = 0.1
     public static let range: ClosedRange<Double> = -10...10
@@ -239,10 +343,17 @@ public enum LyricsOffset {
 }
 
 /// Which side the words line up on.
-public enum LyricsAlignment: String, CaseIterable, Identifiable, Sendable {
+public enum LyricsAlignment: String, Codable, CaseIterable, Identifiable, Sendable {
     case left
     case center
+    case right
 
     public var id: String { rawValue }
-    public var title: String { self == .left ? "Left" : "Centre" }
+    public var title: String {
+        switch self {
+        case .left: return "Left"
+        case .center: return "Centre"
+        case .right: return "Right"
+        }
+    }
 }

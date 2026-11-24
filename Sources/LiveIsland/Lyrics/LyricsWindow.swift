@@ -16,9 +16,12 @@ struct LyricsScreen: Equatable {
 
     var bounds: CGRect { LyricsGeometry.bounds(screen: frame, visible: visible) }
 
-    func frame(for placement: LyricsPlacement) -> CGRect {
-        LyricsGeometry.frame(for: placement, screen: frame, visible: visible, notch: notch)
+    func frame(for placement: LyricsPlacement, position: LyricsPosition) -> CGRect {
+        LyricsGeometry.frame(for: placement, position: position, screen: frame, visible: visible, notch: notch)
     }
+
+    /// A frame relative to this display, as placements keep it.
+    func relative(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: -frame.minX, dy: -frame.minY) }
 
     /// The same pick as the island's: the display chosen in Settings, else the one with the
     /// notch, else the menu bar's.
@@ -39,22 +42,17 @@ struct LyricsScreen: Equatable {
     }
 }
 
-/// What the lyrics view needs from the window: its frame (for the size of the words and where
-/// the header goes) and whether details are hidden.
+/// What the lyrics view needs from the window: its frame (for the size of the words and
+/// where the buttons go), whether the pointer is on it, and whether details are hidden.
 @MainActor
 final class LyricsWindowState: ObservableObject {
     @Published var frame: CGRect = .zero
     @Published var screen: LyricsScreen?
     @Published var hidesDetails = false
+    @Published var isHovering = false
 
     var header: LyricsHeaderLayout { LyricsHeaderLayout(panel: frame, notch: screen?.notch) }
-    /// Hanging from the top edge, it has no top corners: it grows out of the notch.
-    var hangsFromTop: Bool { frame.maxY >= (screen?.frame.maxY ?? .greatestFiniteMagnitude) - 1 }
-    var preset: LyricsPreset {
-        guard let screen else { return .band }
-        let frames = LyricsPreset.allCases.filter { $0 != .custom }.map { ($0, screen.frame(for: LyricsPlacement(preset: $0))) }
-        return frames.first(where: { $0.1 == frame })?.0 ?? .custom
-    }
+    var controlsAtTop: Bool { LyricsControls.atTop(panel: frame, notch: screen?.notch) }
 }
 
 /// A borderless panel that never takes focus: typing still goes to the app in front.
@@ -84,19 +82,34 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-/// The panel's content: the lyrics, with every edge and corner a handle to resize it.
+/// The panel's content: a frosted backdrop (an `NSVisualEffectView`, the only real blur of
+/// what's behind a window) under the SwiftUI card, every edge and corner a handle to resize
+/// it, and the side-to-side drift as a Core Animation loop on both.
 final class LyricsResizingView: NSView {
-    var bounds_: (() -> CGRect)?
+    var limits: (() -> CGRect)?
     var onFrame: ((CGRect, Bool) -> Void)?
+    var onHover: ((Bool) -> Void)?
+    /// Moves with the drift: the backdrop and the card together.
+    private let content = NSView()
+    private let backdrop = NSVisualEffectView()
     private let host: NSView
     private var drag: (start: CGRect, mouse: CGPoint, edges: LyricsGeometry.Edges)?
+    private var look = LyricsAppearance.standard
+    private var drifting = false
     private static let inset: CGFloat = 6
+    private static let driftKey = "drift"
 
     init(host: NSView) {
         self.host = host
         super.init(frame: .zero)
-        host.autoresizingMask = [.width, .height]
-        addSubview(host)
+        wantsLayer = true
+        content.wantsLayer = true
+        backdrop.blendingMode = .behindWindow
+        backdrop.state = .active
+        backdrop.material = .hudWindow
+        content.addSubview(backdrop)
+        content.addSubview(host)
+        addSubview(content)
     }
 
     @available(*, unavailable)
@@ -106,7 +119,60 @@ final class LyricsResizingView: NSView {
 
     override func layout() {
         super.layout()
-        host.frame = bounds
+        let changed = content.frame.size != bounds.size
+        content.frame = bounds
+        backdrop.frame = content.bounds
+        host.frame = content.bounds
+        if changed { updateBackdrop() }
+    }
+
+    /// The blur's strength, its look (dark or light), and its shape: the card's corners and
+    /// its fade toward the sides.
+    func apply(_ look: LyricsAppearance) {
+        let shapeChanged = look.cornerRadius != self.look.cornerRadius || look.edgeFade != self.look.edgeFade
+        self.look = look
+        backdrop.isHidden = look.blur < 0.02
+        backdrop.alphaValue = CGFloat(look.blur)
+        backdrop.material = look.blur > 0.7 ? .fullScreenUI : .hudWindow
+        backdrop.appearance = NSAppearance(named: look.hasLightBackground ? .aqua : .darkAqua)
+        if shapeChanged || backdrop.maskImage == nil { updateBackdrop() }
+    }
+
+    private func updateBackdrop() {
+        let size = bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        let radius = CGFloat(look.cornerRadius)
+        let reach = CGFloat(look.fadeReach)
+        backdrop.maskImage = NSImage(size: size, flipped: false) { rect in
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
+            if reach > 0, let gradient = NSGradient(colorsAndLocations: (.clear, 0), (.black, reach), (.black, 1 - reach), (.clear, 1)) {
+                gradient.draw(in: rect, angle: 0)
+            } else {
+                NSColor.black.setFill()
+                rect.fill()
+            }
+            return true
+        }
+    }
+
+    /// The gentle sway, only while wanted (playing, chosen, no Reduce Motion).
+    func setDrifting(_ on: Bool) {
+        guard on != drifting else { return }
+        drifting = on
+        guard let layer = content.layer else { return }
+        if on {
+            let drift = CABasicAnimation(keyPath: "transform.translation.x")
+            drift.fromValue = -4
+            drift.toValue = 4
+            drift.duration = 3.4
+            drift.autoreverses = true
+            drift.repeatCount = .infinity
+            drift.isAdditive = true
+            drift.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(drift, forKey: Self.driftKey)
+        } else {
+            layer.removeAnimation(forKey: Self.driftKey)
+        }
     }
 
     private func edges(at point: CGPoint) -> LyricsGeometry.Edges {
@@ -127,6 +193,8 @@ final class LyricsResizingView: NSView {
                                        owner: self))
     }
 
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+
     override func mouseMoved(with event: NSEvent) {
         guard drag == nil else { return }
         let edges = edges(at: convert(event.locationInWindow, from: nil))
@@ -135,6 +203,7 @@ final class LyricsResizingView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         if drag == nil { NSCursor.arrow.set() }
+        onHover?(false)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -145,10 +214,10 @@ final class LyricsResizingView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let drag, let limits = bounds_?() else { return }
+        guard let drag, let bounds = limits?() else { return }
         let mouse = NSEvent.mouseLocation
         let delta = CGSize(width: mouse.x - drag.mouse.x, height: mouse.y - drag.mouse.y)
-        onFrame?(LyricsGeometry.resize(drag.start, edges: drag.edges, by: delta, within: limits), false)
+        onFrame?(LyricsGeometry.resize(drag.start, edges: drag.edges, by: delta, within: bounds), false)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -179,21 +248,25 @@ final class LyricsResizingView: NSView {
     }
 }
 
-/// Owns the Sing With Me window: opens it on the island's display at the size saved for that
-/// display, follows drags and resizes, and listens for Escape only while it's open.
+/// Owns the Sing With Me card: opens it on the island's display at the size saved for that
+/// display (small, under the notch, unless the person chose otherwise), follows drags and
+/// resizes, and listens for Escape only while it's open.
 @MainActor
 final class LyricsWindowController {
     private let model: IslandModel
     private var sing: SingWithMe { model.singWithMe }
     private let state = LyricsWindowState()
     private var panel: LyricsPanel?
+    private var container: LyricsResizingView?
     private var openChanges: AnyCancellable?
-    /// Only while open: placements, privacy, displays, keys.
+    /// Only while open: placements, the look, privacy, displays, keys.
     private var whileOpen: [AnyCancellable] = []
     private var monitors: [Any] = []
-    private var screenObserver: NSObjectProtocol?
+    private var screenObservers: [NSObjectProtocol] = []
     private var moveStart: (frame: CGRect, mouse: CGPoint)?
     private static let escape: UInt16 = 53
+    /// While Sing With Me is off, the card opens big enough to explain itself.
+    private static let optInSize = CGSize(width: 380, height: 210)
 
     init(model: IslandModel) {
         self.model = model
@@ -207,12 +280,23 @@ final class LyricsWindowController {
             }
     }
 
+    /// Where the card belongs now: the explanation's size while off, else the saved placement.
+    private func targetFrame(on screen: LyricsScreen) -> CGRect {
+        if !sing.isEnabled {
+            return LyricsGeometry.clamp(LyricsGeometry.underNotch(Self.optInSize, screen: screen.frame, visible: screen.visible,
+                                                                  notch: screen.notch), to: screen.bounds)
+        }
+        return screen.frame(for: sing.placement(for: screen.id), position: sing.appearance.position)
+    }
+
     private func show() {
         guard let screen = LyricsScreen.current(for: model.islandDisplay) else { sing.close(); return }
         let panel = self.panel ?? makePanel()
         state.screen = screen
         state.hidesDetails = model.hidesDetails
-        setFrame(screen.frame(for: sing.placement(for: screen.id)), save: false)
+        state.isHovering = false
+        setFrame(targetFrame(on: screen), save: false)
+        applyLook()
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
@@ -220,7 +304,7 @@ final class LyricsWindowController {
             panel.animator().alphaValue = 1
         }
         watchWhileOpen()
-        log.notice("Sing With Me opened")
+        log.notice("Sing With Me card: \(Int(panel.frame.width), privacy: .public)×\(Int(panel.frame.height), privacy: .public)")
     }
 
     private func hide() {
@@ -234,8 +318,10 @@ final class LyricsWindowController {
                 guard let self, !self.sing.isOpen else { return }
                 panel.orderOut(nil)
                 // Nothing stays behind: the view and its observers go with the window.
+                self.container?.setDrifting(false)
                 panel.contentView = nil
                 self.panel = nil
+                self.container = nil
             }
         })
     }
@@ -250,13 +336,20 @@ final class LyricsWindowController {
             endMove: { [weak self] in self?.endMove() }))
         let host = FirstClickHostingView(rootView: view)
         let container = LyricsResizingView(host: host)
-        container.bounds_ = { [weak self] in self?.state.screen?.bounds ?? .zero }
+        container.limits = { [weak self] in self?.state.screen?.bounds ?? .zero }
         container.onFrame = { [weak self] frame, done in self?.setFrame(frame, save: done) }
+        container.onHover = { [weak self] hovering in
+            guard let self, self.state.isHovering != hovering else { return }
+            self.state.isHovering = hovering
+        }
         panel.contentView = container
         self.panel = panel
+        self.container = container
         return panel
     }
 
+    /// Sets the card's frame; at the end of a drag, saves it as the custom size (and place,
+    /// once it's been moved).
     private func setFrame(_ frame: CGRect, save: Bool) {
         guard let panel else { return }
         if panel.frame != frame {
@@ -264,17 +357,20 @@ final class LyricsWindowController {
             panel.invalidateShadow()
         }
         if state.frame != frame { state.frame = frame }
-        guard save, let screen = state.screen else { return }
-        let preset = state.preset
-        let relative = frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
-        sing.setPlacement(LyricsPlacement(preset: preset, frame: preset == .custom ? relative : nil), for: screen.id)
+        guard save, sing.isEnabled, let screen = state.screen else { return }
+        sing.setPlacement(LyricsPlacement(preset: .custom, frame: screen.relative(frame)), for: screen.id)
+        // Resized under the notch, it stays centred there.
+        if sing.appearance.position == .underNotch {
+            let centred = targetFrame(on: screen)
+            if centred != frame { animate(to: centred) }
+        }
     }
 
     private func choose(_ preset: LyricsPreset) {
         guard let screen = state.screen, preset != .custom else { return }
-        let target = screen.frame(for: LyricsPlacement(preset: preset))
+        sing.appearance.position = .underNotch
         sing.setPlacement(LyricsPlacement(preset: preset), for: screen.id)
-        animate(to: target)
+        animate(to: targetFrame(on: screen))
     }
 
     private func animate(to frame: CGRect) {
@@ -292,37 +388,63 @@ final class LyricsWindowController {
         panel.invalidateShadow()
     }
 
-    // MARK: - Moving by the header
+    private func applyLook() {
+        let look = sing.appearance
+        container?.apply(look)
+        panel?.hasShadow = look.shadow && (look.opacity >= 0.1 || look.blur >= 0.1)
+        panel?.invalidateShadow()
+        let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        container?.setDrifting(look.drift && !still && sing.track?.isPlaying == true)
+    }
+
+    // MARK: - Moving it by dragging
 
     private func beginMove() {
-        guard let panel else { return }
+        guard let panel, moveStart == nil else { return }
         moveStart = (panel.frame, NSEvent.mouseLocation)
     }
 
     private func move() {
+        if moveStart == nil { beginMove() }
         guard let start = moveStart, let bounds = state.screen?.bounds else { return }
         let mouse = NSEvent.mouseLocation
         let moved = start.frame.offsetBy(dx: mouse.x - start.mouse.x, dy: mouse.y - start.mouse.y)
-        setFrame(LyricsGeometry.clamp(moved, to: bounds), save: false)
+        let clamped = LyricsGeometry.clamp(moved, to: bounds)
+        guard let panel, panel.frame != clamped else { return }
+        panel.setFrameOrigin(clamped.origin)
+        state.frame = clamped
     }
 
+    /// Set down somewhere: it stays there ("where I drag it"); a click that didn't move it
+    /// changes nothing.
     private func endMove() {
-        guard moveStart != nil, let panel else { return }
+        guard let start = moveStart, let panel else { return }
         moveStart = nil
-        setFrame(panel.frame, save: true)
+        guard panel.frame != start.frame, sing.isEnabled, let screen = state.screen else { return }
+        sing.appearance.position = .free
+        sing.setPlacement(LyricsPlacement(preset: .custom, frame: screen.relative(panel.frame)), for: screen.id)
     }
 
     // MARK: - While open
 
     private func watchWhileOpen() {
         stopWatching()
-        // Settings typed a size, or Reset Size: follow it.
-        whileOpen.append(sing.$placements.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
+        // Settings typed a size, picked a preset or a position, or Sing With Me was turned on.
+        let placementChanges = Publishers.Merge3(sing.$placements.dropFirst().map { _ in () },
+                                                 sing.$appearance.dropFirst().map(\.position).removeDuplicates().map { _ in () },
+                                                 sing.$isEnabled.dropFirst().map { _ in () })
+        whileOpen.append(placementChanges.receive(on: DispatchQueue.main).sink { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let screen = self.state.screen, self.moveStart == nil else { return }
-                let target = screen.frame(for: self.sing.placement(for: screen.id))
+                let target = self.targetFrame(on: screen)
                 if target != self.state.frame { self.animate(to: target) }
             }
+        })
+        whileOpen.append(sing.$appearance.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyLook() }
+        })
+        whileOpen.append(sing.$track.map { $0?.isPlaying == true }.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyLook() }
         })
         whileOpen.append(Publishers.CombineLatest3(model.$alwaysHideDetails, model.$hideDetailsWhileSharing, model.$screenShared)
             .receive(on: DispatchQueue.main)
@@ -335,11 +457,16 @@ final class LyricsWindowController {
         whileOpen.append(model.$islandDisplay.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
             MainActor.assumeIsolated { self?.screensChanged() }
         })
-        screenObserver = NotificationCenter.default.addObserver(
+        screenObservers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.screensChanged() }
-        }
+        })
+        screenObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyLook() }
+        })
         // Escape closes it: in other apps when LiveIsland may watch keys, and always in its own
         // windows. The panel itself never takes the keyboard.
         let key: (NSEvent) -> Bool = { [weak self] event in
@@ -355,14 +482,17 @@ final class LyricsWindowController {
         whileOpen.removeAll()
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
-        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
-        screenObserver = nil
+        for observer in screenObservers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        screenObservers = []
         moveStart = nil
     }
 
     private func screensChanged() {
         guard sing.isOpen, let screen = LyricsScreen.current(for: model.islandDisplay) else { return }
         state.screen = screen
-        setFrame(screen.frame(for: sing.placement(for: screen.id)), save: false)
+        setFrame(targetFrame(on: screen), save: false)
     }
 }

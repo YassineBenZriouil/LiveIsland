@@ -148,6 +148,36 @@ public enum LRC {
     }
 }
 
+/// How far the line being sung has filled in, Spotify-style: the fill sweeps from its start
+/// to the next line's, and Core Animation moves it, so nothing here runs per frame.
+public struct LyricsFill: Equatable, Sendable {
+    public var index: Int
+    /// How much is filled now, 0 to 1.
+    public var progress: Double
+    /// Wall-clock seconds until it's full; nil while paused (it stays where it is).
+    public var remaining: TimeInterval?
+
+    public init(index: Int, progress: Double, remaining: TimeInterval?) {
+        self.index = index
+        self.progress = progress
+        self.remaining = remaining
+    }
+
+    /// Where this fill will be `seconds` from when it was planned.
+    public func progress(after seconds: TimeInterval) -> Double {
+        guard let remaining, remaining > 0 else { return progress }
+        return min(1, progress + (1 - progress) * max(0, seconds) / remaining)
+    }
+
+    /// Whether `other` says the same as this one, `seconds` later, within `tolerance` of the
+    /// line's length: then the running animation is left alone instead of restarted.
+    public func agrees(with other: LyricsFill, after seconds: TimeInterval, lineLength: TimeInterval,
+                       tolerance: TimeInterval = 0.25) -> Bool {
+        guard index == other.index, (remaining == nil) == (other.remaining == nil) else { return false }
+        return abs(progress(after: seconds) - other.progress) * max(lineLength, 0.001) <= tolerance
+    }
+}
+
 /// When the line on screen next changes. Sing With Me sets one timer to that moment (and
 /// plans again on a seek, a pause or a new rate) instead of checking the time over and over.
 public struct LyricsTiming: Equatable, Sendable {
@@ -171,5 +201,28 @@ public struct LyricsTiming: Equatable, Sendable {
         // A hair past the line's start, so the timer never lands just before it and plans again
         // for the same line.
         return LyricsTiming(index: index, delay: max(0.01, (next - time) / speed + 0.005))
+    }
+
+    /// How long the line at `index` lasts: to the next line's start, or for the last line to
+    /// the end of the track (a few seconds when that isn't known).
+    public static func lineSpan(_ lyrics: Lyrics, index: Int, duration: Double?) -> ClosedRange<Double>? {
+        guard lyrics.kind == .synced, lyrics.lines.indices.contains(index) else { return nil }
+        let start = lyrics.lines[index].time
+        let next = lyrics.lines[(index + 1)...].first { $0.time > start }?.time
+        let end = next ?? max(start + 1, min(duration ?? start + 4, start + 8))
+        return start...max(end, start + 0.05)
+    }
+
+    /// The fill of the line being sung, or nil before the first line and in a break.
+    public static func fill(_ lyrics: Lyrics, position: Double, rate: Double, isPlaying: Bool, offset: Double,
+                            duration: Double?) -> LyricsFill? {
+        let time = position + offset
+        guard let index = lyrics.index(at: time), !lyrics.lines[index].isGap,
+              let span = lineSpan(lyrics, index: index, duration: duration.map { $0 + offset }) else { return nil }
+        let length = span.upperBound - span.lowerBound
+        let progress = min(max((time - span.lowerBound) / length, 0), 1)
+        let speed = rate > 0 ? rate : 1
+        let remaining = isPlaying && progress < 1 ? (span.upperBound - time) / speed : nil
+        return LyricsFill(index: index, progress: progress, remaining: remaining)
     }
 }

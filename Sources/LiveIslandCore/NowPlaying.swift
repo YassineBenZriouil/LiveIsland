@@ -51,7 +51,9 @@ public struct NowPlaying: Equatable, Sendable {
     /// Applies one stream line to the previous state. A diff line changes only the keys it
     /// contains; an empty full payload means nothing is playing. Lines that aren't data return
     /// the previous state unchanged.
-    public static func applying(_ line: Data, to previous: NowPlaying?) -> NowPlaying? {
+    /// A position without a time (some players leave it out) is taken as of `now`, when it
+    /// arrived: otherwise it would never move, and nothing could follow the song.
+    public static func applying(_ line: Data, to previous: NowPlaying?, now: Date = Date()) -> NowPlaying? {
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               object["type"] as? String == "data",
               let payload = object["payload"] as? [String: Any]
@@ -68,6 +70,7 @@ public struct NowPlaying: Equatable, Sendable {
         if has("duration") { info.duration = (payload["duration"] as? NSNumber)?.doubleValue }
         if has("elapsedTime") { info.elapsed = (payload["elapsedTime"] as? NSNumber)?.doubleValue }
         if has("timestamp") { info.timestamp = (payload["timestamp"] as? String).flatMap(Format.date(iso8601:)) }
+        if has("elapsedTime"), !has("timestamp") || info.timestamp == nil { info.timestamp = now }
         if has("playbackRate") { info.playbackRate = (payload["playbackRate"] as? NSNumber)?.doubleValue ?? 1 }
         if has("playing") { info.isPlaying = payload["playing"] as? Bool ?? false }
         if has("artworkData") { info.artwork = (payload["artworkData"] as? String).flatMap { Data(base64Encoded: $0) } }

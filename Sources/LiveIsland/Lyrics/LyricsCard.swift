@@ -16,11 +16,11 @@ struct SingWithMeCard: View {
 
     var body: some View {
         if sing.isEnabled {
-            Drifting(active: playing && !reduceMotion, distance: 7) {
+            Drifting(active: playing && sing.appearance.drift && !reduceMotion, distance: 5) {
                 CardFace(sing: sing, accent: accent, open: open)
                     .redacted(reason: hidesDetails ? .privacy : [])
             }
-            .frame(minWidth: 90, maxWidth: 300)
+            .frame(minWidth: 90, maxWidth: 220)
             .frame(height: 26)
             .layoutPriority(-1)
         } else {
