@@ -36,7 +36,7 @@ struct UsageLedgerTests {
         try append(String(partial.dropFirst(40)) + "\n", to: url)
         ledger.ingest(url, now: now)
         #expect(ledger.recordCount == 2)
-        #expect(ledger.summary(now: now, calendar: utc).windowTokens == 2 * 4_510)
+        #expect(ledger.summary(now: now, calendar: utc).windowTokens == 2 * 510, "cache reads are counted apart")
     }
 
     @Test func windowsStartOnTheHourOfTheFirstMessageAndLastFiveHours() throws {
@@ -56,7 +56,8 @@ struct UsageLedgerTests {
         #expect(summary.windowEnd == Format.date(iso8601: "2026-10-22T14:00:00.000Z"))
         #expect(summary.windowTokens == 3)
         #expect(summary.windowRequests == 2)
-        #expect(summary.todayTokens == 100 + 3)
+        #expect(summary.todayTokens == 10 + 3)
+        #expect(summary.today.cacheRead == 90)
         #expect(summary.todayRequests == 3)
 
         // After the window ends there's no current window, until the next message.

@@ -204,10 +204,19 @@ public struct ClaudeLimitNotice: Equatable, Sendable {
 public struct UsageSummary: Equatable, Sendable {
     public var windowStart: Date?
     public var windowEnd: Date?
+    /// Tokens the model newly read or wrote (`window.fresh`): cache reads are left out, or
+    /// they'd be most of the number. They're in `window.cacheRead`.
     public var windowTokens: Int
     public var windowRequests: Int
+    /// Today's fresh tokens (`today.fresh`), cache reads apart in `today.cacheRead`.
     public var todayTokens: Int
     public var todayRequests: Int
+    /// Each kind of token, for the window and today.
+    public var window = TokenCounts()
+    public var today = TokenCounts()
+    /// What the same use would cost at API list prices: an estimate.
+    public var windowCost = CostEstimate()
+    public var todayCost = CostEstimate()
 
     public init(windowStart: Date? = nil, windowEnd: Date? = nil, windowTokens: Int = 0, windowRequests: Int = 0,
                 todayTokens: Int = 0, todayRequests: Int = 0) {
