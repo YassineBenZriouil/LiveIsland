@@ -1,7 +1,7 @@
 // Draws the LiveIsland icon: a glowing Dynamic Island with album art and a waveform,
 // on Apple's macOS icon grid (an 824 pt body centered on a 1024 pt canvas).
 //
-//   swift scripts/MAKE-ICON.swift <output.png>
+//   swift scripts/make-icon.swift <output.png>
 import AppKit
 
 let size: CGFloat = 1024

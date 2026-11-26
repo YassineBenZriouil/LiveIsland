@@ -172,8 +172,8 @@ Measured on an M4 Pro with Claude Code and Codex running and Spotify playing: un
 
 ```bash
 git clone https://github.com/charonova/LiveIsland.git && cd LiveIsland
-./scripts/BUILD.sh     # builds build/LiveIsland.app; drag it to /Applications
-./scripts/TEST.sh      # runs the tests
+./scripts/build.sh     # builds build/LiveIsland.app; drag it to /Applications
+./scripts/test.sh      # runs the tests
 ```
 
 ## Links

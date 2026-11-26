@@ -3,7 +3,7 @@ import Testing
 @testable import LiveIslandCore
 
 /// Reads this Mac's real Claude Code transcripts, to check speed and totals on real data.
-/// Opt-in, since it depends on the machine: LIVEISLAND_REAL_DATA=1 ./scripts/TEST.sh -c release --filter RealData
+/// Opt-in, since it depends on the machine: LIVEISLAND_REAL_DATA=1 ./scripts/test.sh -c release --filter RealData
 @Suite("Real data", .enabled(if: ProcessInfo.processInfo.environment["LIVEISLAND_REAL_DATA"] == "1"))
 struct RealDataBenchmark {
     @Test func ledgerReadsTodaysTranscriptsQuickly() throws {
