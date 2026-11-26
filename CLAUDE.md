@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Claude Code notes
 
+- Three SwiftPM targets: `LiveIslandCore` (no UI, the only tested code), the `LiveIsland` app on top of it, and `LiveIslandCoreTests`. Logic you want tested belongs in Core; `swift build` is the quick compile check.
 - Trust `swift build` over SourceKit's single-file "Cannot find … in scope" noise.
 - Run one suite or test by its Swift type and function name, not the `@Suite` title: `./scripts/TEST.sh --filter DisplayChoiceTests` or `--filter "DisplayChoiceTests/goesWhereThePersonPicked"`. The script passes extra arguments to `swift test`.
 - Builds need only the Command Line Tools and CMake (`brew install cmake`); `./scripts/BUILD.sh` builds `build/LiveIsland.app`; the installed copy lives in `/Applications` and updates through Settings › Software Update. CI (`.github/workflows/build.yml`) runs on `macos-26` because Liquid Glass needs the macOS 26 SDK; glass calls sit behind `#available(macOS 26, *)` in `Island/Glass.swift` so macOS 14 still works.
